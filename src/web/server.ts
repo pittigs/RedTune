@@ -131,6 +131,7 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
   };
 
   bot.player.onStateChange = broadcast;
+  bot.onStatusChange = broadcast;
 
   // WebSocket Verbindung mit Token-Prüfung
   wss.on('connection', (ws, req) => {

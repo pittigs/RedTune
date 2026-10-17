@@ -25,18 +25,27 @@ export class AudioResolver {
   ) {}
 
   async resolve(query: string, requestedBy: string): Promise<Track[]> {
-    const isUrl = /^https?:\/\//i.test(query);
-    const target = isUrl ? query : `ytsearch1:${query}`;
+    let cleanQuery = query.trim();
+    // YouTube Music Radio/Mix URL Parameter entfernen für einzelne Tracks
+    if (cleanQuery.includes('/watch?v=') && cleanQuery.includes('list=RD')) {
+      cleanQuery = cleanQuery.replace(/[&?]list=RD[^&]*/g, '');
+    }
+
+    const isUrl = /^https?:\/\//i.test(cleanQuery);
+    const target = isUrl ? cleanQuery : `ytsearch1:${cleanQuery}`;
 
     const args = [
       '--dump-single-json',
       '--flat-playlist',
       '--no-warnings',
       '--socket-timeout', '15',
-      ...getYtdlpAuthArgs(this.dataDir),
-      '--',
-      target
     ];
+
+    if (target.includes('music.youtube.com')) {
+      args.push('--extractor-args', 'youtube:player_client=web_music,web');
+    }
+
+    args.push(...getYtdlpAuthArgs(this.dataDir), '--', target);
 
     try {
       const { stdout } = await execFileAsync(this.ytdlpPath, args, { maxBuffer: 10 * 1024 * 1024 });

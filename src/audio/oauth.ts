@@ -76,11 +76,11 @@ export class OAuthManager {
 
         if (!resolved) {
           // Suche nach: go to https://www.google.com/device and enter code XXXX-XXXX
-          const match = outputBuffer.match(/(https:\/\/www\.google\.com\/device)[^A-Z0-9]*([A-Z0-9\-]{4,15})/i);
+          const match = outputBuffer.match(/enter\s+code\s+([A-Z0-9\-]{4,15})/i);
           if (match) {
             resolved = true;
-            const url = match[1];
-            const code = match[2];
+            const url = 'https://www.google.com/device';
+            const code = match[1];
             this.pendingAuth = { url, code, startedAt: Date.now() };
             console.log(`[OAuth] Device-Code erhalten: ${code} (${url})`);
             resolve({ url, code });

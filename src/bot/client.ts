@@ -15,6 +15,7 @@ export class TeamSpeakBot {
   public queue!: MusicQueue;
   public resolver!: AudioResolver;
   public commandHandler!: CommandHandler;
+  public onStatusChange?: () => void;
 
   constructor(
     public readonly config: BotConfig,
@@ -102,11 +103,13 @@ export class TeamSpeakBot {
 
     this.client.on('connected', () => {
       console.log('[Bot] Status: Online');
+      this.onStatusChange?.();
     });
 
     this.client.on('disconnected', ({ error, willReconnect }) => {
       console.warn(`[Bot] Verbindung getrennt. Reconnect: ${willReconnect ? 'Ja' : 'Nein'}`, error?.message || '');
       this.player.stop();
+      this.onStatusChange?.();
     });
 
     // Chat-Nachrichten verarbeiten

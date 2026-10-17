@@ -419,7 +419,13 @@ searchForm.addEventListener('submit', async (e) => {
     if (!res.ok) throw new Error(data.error || 'Fehler beim Abspielen');
     searchInput.value = '';
   } catch (err) {
-    alert(`Fehler: ${err.message}`);
+    if (err.message.includes('Sign in') || err.message.includes('bot') || err.message.includes('Bot-Erkennung') || err.message.includes('Anmeldung')) {
+      showYtFeedback('YouTube verlangt eine einmalige Anmeldung bei Google (Bot-Schutz). Bitte klicke auf "Google Device-Code anfordern" und bestätige den Code bei Google.', false);
+      ytModal.classList.remove('hidden');
+      fetchYtStatus();
+    } else {
+      alert(`Fehler: ${err.message}`);
+    }
   } finally {
     searchButton.disabled = false;
     searchButton.innerHTML = '<span>Abspielen</span>';
