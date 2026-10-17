@@ -1,7 +1,8 @@
 services:
   redtune:
-    build: .
-    image: redtune:latest
+    image: ghcr.io/pittigs/redtune:latest
+    # Optional: Zum lokalen Bauen einkommentieren:
+    # build: .
     container_name: redtune
     restart: unless-stopped
     ports:
