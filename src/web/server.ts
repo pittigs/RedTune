@@ -337,6 +337,8 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
         '--dump-single-json',
         '--no-warnings',
         '--socket-timeout', '15',
+        '-f', 'ba/b',
+        '--skip-download',
         ...getYtdlpAuthArgs(bot.dataDir),
         '--',
         'https://www.youtube.com/watch?v=dQw4w9WgXcQ'

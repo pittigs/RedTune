@@ -31,6 +31,11 @@ export class AudioResolver {
       cleanQuery = cleanQuery.replace(/[&?]list=RD[^&]*/g, '');
     }
 
+    // music.youtube.com zu www.youtube.com normalisieren, um Standard-Extraktoren zu nutzen
+    if (cleanQuery.includes('music.youtube.com')) {
+      cleanQuery = cleanQuery.replace('music.youtube.com', 'www.youtube.com');
+    }
+
     const isUrl = /^https?:\/\//i.test(cleanQuery);
     const target = isUrl ? cleanQuery : `ytsearch1:${cleanQuery}`;
 
@@ -39,11 +44,9 @@ export class AudioResolver {
       '--flat-playlist',
       '--no-warnings',
       '--socket-timeout', '15',
+      '-f', 'ba/b',
+      '--skip-download',
     ];
-
-    if (target.includes('music.youtube.com')) {
-      args.push('--extractor-args', 'youtube:player_client=web_music,web');
-    }
 
     args.push(...getYtdlpAuthArgs(this.dataDir), '--', target);
 
@@ -70,7 +73,7 @@ export class AudioResolver {
       console.error('[Resolver] Fehler beim Auflösen von:', query, stderr || msg);
 
       if (stderr.includes('Sign in to confirm you\'re not a bot') || msg.includes('Sign in to confirm you\'re not a bot')) {
-        throw new Error('YouTube verlangt eine Anmeldung (Bot-Erkennung). Bitte nutze die Google-Anmeldung oder Cookies in den Einstellungen.');
+        throw new Error('YouTube verlangt eine Verifizierung (Bot-Erkennung). Bitte hinterlege deine cookies.txt in den Einstellungen (Zahnrad ⚙️).');
       }
 
       throw new Error(`Fehler beim Abrufen von YouTube: ${stderr.trim() || msg}`);
@@ -79,7 +82,8 @@ export class AudioResolver {
 
   private formatEntry(entry: YtdlpEntry, requestedBy: string): Track {
     const id = entry.id || Math.random().toString(36).substring(7);
-    const url = entry.webpage_url || (entry.id ? `https://music.youtube.com/watch?v=${entry.id}` : entry.url || '');
+    const rawUrl = entry.webpage_url || entry.url || (entry.id ? `https://www.youtube.com/watch?v=${entry.id}` : '');
+    const url = rawUrl.replace('music.youtube.com', 'www.youtube.com');
     const title = entry.title || 'Unbekannter Titel';
     const durationSec = Math.round(entry.duration || 0);
     const thumbnail = entry.thumbnail || (entry.thumbnails && entry.thumbnails[0]?.url) || '';

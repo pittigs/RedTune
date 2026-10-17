@@ -89,15 +89,16 @@ export class AudioPlayer {
       });
 
       // 2. yt-dlp Prozess starten (streamt den YouTube Music / YouTube Audiotrack in ffmpeg stdin)
+      const playUrl = track.url.replace('music.youtube.com', 'www.youtube.com');
       const ytArgs = [
         '--no-playlist',
         '--no-warnings',
-        '-f', 'bestaudio[ext=webm]/bestaudio/best',
+        '-f', 'bestaudio/best',
         '--socket-timeout', '15',
         ...getYtdlpAuthArgs(this.dataDir),
         '-o', '-',
         '--',
-        track.url
+        playUrl
       ];
 
       const yt = spawn(this.ytdlpPath, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
