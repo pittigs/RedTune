@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Client, generateIdentitySync, parseIdentity, type Identity } from '@honeybbq/teamspeak/client';
-import { escape, Codec } from '@honeybbq/teamspeak';
+import { escape, Codec, ClientStatus } from '@honeybbq/teamspeak';
 import type { BotConfig } from '../config.js';
 import { AudioPlayer } from '../audio/player.js';
 import { MusicQueue } from '../audio/queue.js';
@@ -26,7 +26,7 @@ export class TeamSpeakBot {
     // Initialisiert den AudioPlayer mit unserem voiceSender Hook
     this.player = new AudioPlayer(
       (packet: Uint8Array, codec: Codec) => {
-        if (this.client?.status === 3 /* Connected */) {
+        if (this.client?.status === ClientStatus.Connected) {
           try {
             this.client.sendVoice(packet, codec);
           } catch (err) {
@@ -136,7 +136,7 @@ export class TeamSpeakBot {
   }
 
   public async broadcastChannel(text: string): Promise<void> {
-    if (this.client?.status === 3) {
+    if (this.client?.status === ClientStatus.Connected) {
       try {
         await this.client.exec(`sendtextmessage targetmode=2 msg=${escape(text)}`);
       } catch (err) {
@@ -192,7 +192,7 @@ export class TeamSpeakBot {
 
   public getStatus() {
     return {
-      connected: this.client?.status === 3,
+      connected: this.client?.status === ClientStatus.Connected,
       botName: this.config.server.nickname,
       server: this.config.server.address,
       uid: this.identity?.uid("sha1"),
