@@ -118,7 +118,8 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
   });
 
   app.delete('/api/queue/:index', (req: Request, res: Response) => {
-    const idx = parseInt(req.params.index, 10);
+    const rawIdx = Array.isArray(req.params.index) ? req.params.index[0] : req.params.index;
+    const idx = parseInt(rawIdx || '-1', 10);
     const removed = bot.queue.remove(idx);
     broadcast();
     res.json({ success: removed });
