@@ -5,6 +5,7 @@ import path from 'node:path';
 import OpusScript from 'opusscript';
 import { Codec } from '@honeybbq/teamspeak';
 import type { Track } from './queue.js';
+import { getYtdlpAuthArgs } from './auth-args.js';
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -88,26 +89,16 @@ export class AudioPlayer {
       });
 
       // 2. yt-dlp Prozess starten (streamt den YouTube Music / YouTube Audiotrack in ffmpeg stdin)
-      const cookiesFile = path.join(this.dataDir, 'cookies.txt');
       const ytArgs = [
         '--no-playlist',
         '--no-warnings',
-        '--extractor-args', 'youtube:player_client=ios,android,web',
         '-f', 'bestaudio[ext=webm]/bestaudio/best',
         '--socket-timeout', '15',
+        ...getYtdlpAuthArgs(this.dataDir),
         '-o', '-',
+        '--',
+        track.url
       ];
-
-      if (fs.existsSync(cookiesFile)) {
-        try {
-          const stat = fs.statSync(cookiesFile);
-          if (stat.size > 0) {
-            ytArgs.push('--cookies', cookiesFile);
-          }
-        } catch {}
-      }
-
-      ytArgs.push('--', track.url);
 
       const yt = spawn(this.ytdlpPath, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
       this.currentProcessYt = yt;

@@ -473,17 +473,28 @@ window.removeQueueItem = async (index) => {
   await apiFetch(`/api/queue/${index}`, { method: 'DELETE' });
 };
 
-// --- YouTube & Cookie Settings Modal ---
+// --- YouTube & Bot-Schutz Modal ---
 const ytModal = document.getElementById('ytModal');
 const ytSettingsBtn = document.getElementById('ytSettingsBtn');
 const ytCloseBtn = document.getElementById('ytCloseBtn');
 const ytStatusBox = document.getElementById('ytStatusBox');
 const ytStatusText = document.getElementById('ytStatusText');
+
+const oauthIdleBox = document.getElementById('oauthIdleBox');
+const oauthStartBtn = document.getElementById('oauthStartBtn');
+const oauthPendingBox = document.getElementById('oauthPendingBox');
+const oauthUrlLink = document.getElementById('oauthUrlLink');
+const oauthCodeDisplay = document.getElementById('oauthCodeDisplay');
+const oauthConnectedBox = document.getElementById('oauthConnectedBox');
+const oauthDisconnectBtn = document.getElementById('oauthDisconnectBtn');
+
 const ytCookieForm = document.getElementById('ytCookieForm');
 const ytCookieInput = document.getElementById('ytCookieInput');
 const ytFeedback = document.getElementById('ytFeedback');
 const ytTestBtn = document.getElementById('ytTestBtn');
 const ytDeleteBtn = document.getElementById('ytDeleteBtn');
+
+let ytPollTimer = null;
 
 function showYtFeedback(msg, isSuccess = false) {
   ytFeedback.textContent = msg;
@@ -500,17 +511,45 @@ async function fetchYtStatus() {
     const res = await apiFetch('/api/youtube/status');
     const data = await res.json();
 
-    if (data.hasCookies) {
+    // 1. Google OAuth Status
+    if (data.oauth && data.oauth.connected) {
+      oauthIdleBox.classList.add('hidden');
+      oauthPendingBox.classList.add('hidden');
+      oauthConnectedBox.classList.remove('hidden');
       ytStatusBox.classList.add('active');
-      ytStatusText.textContent = `Cookies aktiv (${data.lines} Einträge, ${Math.round(data.size / 1024)} KB)`;
-      ytDeleteBtn.classList.remove('hidden');
-    } else {
+      ytStatusText.textContent = '✔ Google-Konto verbunden (OAuth2 aktiv)';
+      if (ytPollTimer) clearTimeout(ytPollTimer);
+    } else if (data.oauth && data.oauth.pending) {
+      oauthIdleBox.classList.add('hidden');
+      oauthPendingBox.classList.remove('hidden');
+      oauthConnectedBox.classList.add('hidden');
+      if (data.oauth.url) oauthUrlLink.href = data.oauth.url;
+      if (data.oauth.code) oauthCodeDisplay.textContent = data.oauth.code;
       ytStatusBox.classList.remove('active');
-      ytStatusText.textContent = 'Keine Cookies hinterlegt (Client-Bypass aktiv)';
-      ytDeleteBtn.classList.add('hidden');
+      ytStatusText.textContent = '⏳ Warte auf Google-Bestätigung...';
+
+      // Automatisch alle 3 Sekunden nachprüfen
+      if (ytPollTimer) clearTimeout(ytPollTimer);
+      ytPollTimer = setTimeout(fetchYtStatus, 3000);
+    } else {
+      oauthIdleBox.classList.remove('hidden');
+      oauthPendingBox.classList.add('hidden');
+      oauthConnectedBox.classList.add('hidden');
+      if (ytPollTimer) clearTimeout(ytPollTimer);
+
+      // 2. Cookie Status als Fallback
+      if (data.hasCookies && data.cookiesInfo) {
+        ytStatusBox.classList.add('active');
+        ytStatusText.textContent = `✔ Cookies aktiv (${data.cookiesInfo.lines} Einträge, ${Math.round(data.cookiesInfo.size / 1024)} KB)`;
+        ytDeleteBtn.classList.remove('hidden');
+      } else {
+        ytStatusBox.classList.remove('active');
+        ytStatusText.textContent = 'Nicht angemeldet (Bot-Schutz kann Downloads sperren)';
+        ytDeleteBtn.classList.add('hidden');
+      }
     }
   } catch (err) {
-    ytStatusText.textContent = 'Fehler beim Laden des Cookie-Status';
+    ytStatusText.textContent = 'Fehler beim Abfragen des Status';
   }
 }
 
@@ -525,9 +564,61 @@ if (ytSettingsBtn) {
 if (ytCloseBtn) {
   ytCloseBtn.addEventListener('click', () => {
     ytModal.classList.add('hidden');
+    if (ytPollTimer) clearTimeout(ytPollTimer);
   });
 }
 
+// Google OAuth Start Button
+if (oauthStartBtn) {
+  oauthStartBtn.addEventListener('click', async () => {
+    oauthStartBtn.disabled = true;
+    oauthStartBtn.innerHTML = '<span>Fordere Code an...</span>';
+    showYtFeedback('Starte Google Device-Anmeldung...', true);
+
+    try {
+      const res = await apiFetch('/api/youtube/oauth/start', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Fehler beim Anfordern des Codes');
+
+      oauthIdleBox.classList.add('hidden');
+      oauthPendingBox.classList.remove('hidden');
+      if (data.url) oauthUrlLink.href = data.url;
+      if (data.code) oauthCodeDisplay.textContent = data.code;
+      showYtFeedback('Code erhalten! Bitte jetzt bei Google eingeben.', true);
+
+      if (ytPollTimer) clearTimeout(ytPollTimer);
+      ytPollTimer = setTimeout(fetchYtStatus, 3000);
+    } catch (err) {
+      showYtFeedback(err.message, false);
+      oauthIdleBox.classList.remove('hidden');
+      oauthPendingBox.classList.add('hidden');
+    } finally {
+      oauthStartBtn.disabled = false;
+      oauthStartBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+          <path d="M12.545,10.239v3.821h5.445c-0.712,2.315-2.647,3.972-5.445,3.972c-3.332,0-6.033-2.701-6.033-6.032s2.701-6.032,6.033-6.032c1.498,0,2.866,0.549,3.921,1.453l2.814-2.814C17.503,2.988,15.139,2,12.545,2C7.021,2,2.543,6.477,2.543,12s4.478,10,10.002,10c8.396,0,10.249-7.85,9.426-11.748L12.545,10.239z"/>
+        </svg>
+        <span>Google Device-Code anfordern</span>
+      `;
+    }
+  });
+}
+
+// Google OAuth Disconnect
+if (oauthDisconnectBtn) {
+  oauthDisconnectBtn.addEventListener('click', async () => {
+    if (!confirm('Möchtest du das verbundene Google-Konto trennen?')) return;
+    try {
+      await apiFetch('/api/youtube/oauth/disconnect', { method: 'POST' });
+      showYtFeedback('Google-Verbindung getrennt.', true);
+      fetchYtStatus();
+    } catch (err) {
+      showYtFeedback(err.message, false);
+    }
+  });
+}
+
+// Cookie Formular
 if (ytCookieForm) {
   ytCookieForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -553,10 +644,11 @@ if (ytCookieForm) {
   });
 }
 
+// Verbindungstest (prüft direkt einen Stream)
 if (ytTestBtn) {
   ytTestBtn.addEventListener('click', async () => {
     ytTestBtn.disabled = true;
-    ytTestBtn.innerHTML = '<span>Prüfe...</span>';
+    ytTestBtn.innerHTML = '<span>Prüfe Video-Stream...</span>';
     showYtFeedback('Verbindungstest zu YouTube läuft...', true);
 
     try {
@@ -565,7 +657,7 @@ if (ytTestBtn) {
       if (!res.ok) throw new Error(data.error || 'Test fehlgeschlagen');
       showYtFeedback(data.message, true);
     } catch (err) {
-      showYtFeedback(err.message, false);
+      showYtFeedback(`Test fehlgeschlagen: ${err.message}`, false);
     } finally {
       ytTestBtn.disabled = false;
       ytTestBtn.innerHTML = '<span>Verbindung testen</span>';
@@ -573,6 +665,7 @@ if (ytTestBtn) {
   });
 }
 
+// Cookies löschen
 if (ytDeleteBtn) {
   ytDeleteBtn.addEventListener('click', async () => {
     if (!confirm('Möchtest du die gespeicherten YouTube Cookies wirklich löschen?')) return;

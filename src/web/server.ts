@@ -4,8 +4,14 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { TeamSpeakBot } from '../bot/client.js';
 import { UserManager } from '../auth/users.js';
+import { OAuthManager } from '../audio/oauth.js';
+import { getYtdlpAuthArgs } from '../audio/auth-args.js';
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +22,7 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
   const wss = new WebSocketServer({ server });
 
   const userManager = new UserManager(bot.dataDir);
+  const oauthManager = new OAuthManager(bot.dataDir);
 
   function getRequestToken(req: Request): string | undefined {
     const authHeader = req.headers.authorization;
@@ -258,28 +265,54 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     res.json({ success: ok });
   });
 
-  // YouTube / Cookie Management Endpunkte
+  // YouTube / Cookie & OAuth Management Endpunkte
   const cookiesPath = path.join(bot.dataDir, 'cookies.txt');
 
   app.get('/api/youtube/status', (_req: Request, res: Response) => {
+    let cookiesInfo: any = null;
     try {
       if (fs.existsSync(cookiesPath)) {
         const stat = fs.statSync(cookiesPath);
         const content = fs.readFileSync(cookiesPath, 'utf-8');
         const lines = content.split('\n').filter(l => l.trim().length > 0 && !l.startsWith('#')).length;
-        return res.json({
-          hasCookies: true,
+        cookiesInfo = {
           size: stat.size,
           lines,
           modified: stat.mtime
-        });
+        };
       }
     } catch (e) {
       console.error('[Web] Fehler beim Abfragen der Cookies:', e);
     }
-    res.json({ hasCookies: false });
+
+    const oauth = oauthManager.getStatus();
+
+    res.json({
+      hasCookies: Boolean(cookiesInfo),
+      cookiesInfo,
+      oauth
+    });
   });
 
+  // Google OAuth Flow starten
+  app.post('/api/youtube/oauth/start', async (_req: Request, res: Response) => {
+    try {
+      console.log('[Web] Starte Google Device-Code OAuth Flow...');
+      const authData = await oauthManager.startFlow(bot.config.audio.ytdlpPath);
+      res.json({ success: true, ...authData });
+    } catch (err: any) {
+      console.error('[Web] OAuth Fehler:', err);
+      res.status(500).json({ error: err?.message || 'Fehler beim Starten der Google-Anmeldung' });
+    }
+  });
+
+  // Google OAuth trennen
+  app.post('/api/youtube/oauth/disconnect', (_req: Request, res: Response) => {
+    oauthManager.disconnect();
+    res.json({ success: true });
+  });
+
+  // Cookies speichern
   app.post('/api/youtube/cookies', (req: Request, res: Response) => {
     const { cookies } = req.body;
     if (typeof cookies !== 'string' || cookies.trim().length === 0) {
@@ -295,6 +328,7 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     }
   });
 
+  // Cookies löschen
   app.delete('/api/youtube/cookies', (_req: Request, res: Response) => {
     try {
       if (fs.existsSync(cookiesPath)) {
@@ -307,22 +341,32 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     }
   });
 
+  // Echter Stream-Verbindungstest mit unzensierter Fehlerausgabe
   app.post('/api/youtube/test', async (_req: Request, res: Response) => {
     try {
-      console.log('[Web] Starte YouTube Verbindungstest...');
-      const tracks = await bot.resolver.resolve('ytsearch1:music test', 'Diagnostic Test');
-      if (tracks.length > 0) {
-        res.json({
-          success: true,
-          message: `Verbindung erfolgreich! Test-Titel gefunden: "${tracks[0].title}"`
-        });
-      } else {
-        res.status(404).json({ success: false, error: 'Keine Antwort von YouTube erhalten.' });
-      }
-    } catch (err) {
+      console.log('[Web] Starte YouTube Verbindungstest (Videotest)...');
+      const testArgs = [
+        '--dump-single-json',
+        '--no-warnings',
+        '--socket-timeout', '15',
+        ...getYtdlpAuthArgs(bot.dataDir),
+        '--',
+        'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+      ];
+
+      const { stdout } = await execFileAsync(bot.config.audio.ytdlpPath, testArgs, { maxBuffer: 10 * 1024 * 1024 });
+      const data = JSON.parse(stdout);
+      res.json({
+        success: true,
+        message: `✔ Verbindung erfolgreich! Stream autorisiert für: "${data.title}"`
+      });
+    } catch (err: any) {
+      const stderr = err?.stderr || '';
+      const msg = err?.message || '';
+      console.error('[Web] YouTube Test fehlgeschlagen:', stderr || msg);
       res.status(500).json({
         success: false,
-        error: (err as Error).message
+        error: stderr.trim() || msg
       });
     }
   });
