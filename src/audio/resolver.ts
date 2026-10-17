@@ -39,18 +39,19 @@ export class AudioResolver {
     const isUrl = /^https?:\/\//i.test(cleanQuery);
     const target = isUrl ? cleanQuery : `ytsearch1:${cleanQuery}`;
 
-    const args = [
-      '--dump-single-json',
-      '--flat-playlist',
-      '--no-warnings',
-      '--socket-timeout', '15',
-      '-f', 'ba/b',
-      '--skip-download',
-    ];
+    const runYtdlp = async (withCookies: boolean): Promise<Track[]> => {
+      const args = [
+        '--dump-single-json',
+        '--flat-playlist',
+        '--no-warnings',
+        '--socket-timeout', '15',
+        '-f', 'ba/b',
+        '--skip-download',
+        ...getYtdlpAuthArgs(this.dataDir, withCookies),
+        '--',
+        target
+      ];
 
-    args.push(...getYtdlpAuthArgs(this.dataDir), '--', target);
-
-    try {
       const { stdout } = await execFileAsync(this.ytdlpPath, args, { maxBuffer: 10 * 1024 * 1024 });
       const data: YtdlpEntry = JSON.parse(stdout);
 
@@ -67,9 +68,24 @@ export class AudioResolver {
       }
 
       return [this.formatEntry(data, requestedBy)];
+    };
+
+    try {
+      return await runYtdlp(true);
     } catch (err: any) {
       const stderr = err?.stderr || '';
       const msg = err?.message || '';
+
+      // Falls YouTube mit Cookies "The page needs to be reloaded" meldet, ohne Cookies versuchen
+      if (stderr.includes('The page needs to be reloaded') || msg.includes('The page needs to be reloaded')) {
+        console.warn('[Resolver] "The page needs to be reloaded" erhalten. Versuche Fallback ohne Cookies...');
+        try {
+          return await runYtdlp(false);
+        } catch (fallbackErr: any) {
+          console.error('[Resolver] Fallback ohne Cookies ebenfalls fehlgeschlagen:', fallbackErr?.message || fallbackErr);
+        }
+      }
+
       console.error('[Resolver] Fehler beim Auflösen von:', query, stderr || msg);
 
       if (stderr.includes('Sign in to confirm you\'re not a bot') || msg.includes('Sign in to confirm you\'re not a bot')) {
