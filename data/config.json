@@ -1,0 +1,22 @@
+{
+  "server": {
+    "address": "DEINE_SERVER_IP_ODER_DOMAIN",
+    "password": "",
+    "nickname": "RedTune",
+    "channel": "",
+    "channelPassword": ""
+  },
+  "audio": {
+    "defaultVolume": 50,
+    "ffmpegPath": "ffmpeg",
+    "ytdlpPath": "yt-dlp"
+  },
+  "web": {
+    "enabled": true,
+    "port": 58913
+  },
+  "bot": {
+    "commandPrefix": "!",
+    "adminUids": []
+  }
+}

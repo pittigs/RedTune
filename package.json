@@ -1,0 +1,23 @@
+{
+  "name": "redtune",
+  "version": "1.0.0",
+  "description": "RedTune – Custom TeamSpeak 6 & 3 YouTube Music Bot with Real-Time Web Dashboard",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@honeybbq/teamspeak": "^1.0.0-beta.7",
+    "express": "^4.21.2",
+    "opusscript": "^0.1.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.0",
+    "@types/ws": "^8.5.14",
+    "typescript": "^5.7.3"
+  }
+}

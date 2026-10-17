@@ -1,0 +1,12 @@
+services:
+  redtune:
+    build: .
+    image: redtune:latest
+    container_name: redtune
+    restart: unless-stopped
+    ports:
+      # Web-Dashboard & Echtzeit-Steuerung im Browser
+      - "58913:58913"
+    volumes:
+      # Speichert config.json und die generierte TeamSpeak-Identität persistent
+      - ./data:/app/data

@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Build Output
+dist/
+
+# Persistente Secrets & Identitäten
+data/identity.txt
+
+# Logs & Temp
+*.log
+npm-debug.log*
+.DS_Store
