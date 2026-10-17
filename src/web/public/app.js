@@ -4,10 +4,21 @@ const connectionBadge = document.getElementById('connectionBadge');
 const connectionText = document.getElementById('connectionText');
 const botStatusText = document.getElementById('botStatusText');
 const serverText = document.getElementById('serverText');
+const userBadge = document.getElementById('userBadge');
+const userName = document.getElementById('userName');
 const logoutBtn = document.getElementById('logoutBtn');
 
-const loginOverlay = document.getElementById('loginOverlay');
+const authOverlay = document.getElementById('authOverlay');
+const setupCard = document.getElementById('setupCard');
+const setupForm = document.getElementById('setupForm');
+const setupUsername = document.getElementById('setupUsername');
+const setupPassword = document.getElementById('setupPassword');
+const setupPasswordConfirm = document.getElementById('setupPasswordConfirm');
+const setupError = document.getElementById('setupError');
+
+const loginCard = document.getElementById('loginCard');
 const loginForm = document.getElementById('loginForm');
+const loginUsername = document.getElementById('loginUsername');
 const loginPassword = document.getElementById('loginPassword');
 const loginError = document.getElementById('loginError');
 
@@ -57,7 +68,12 @@ async function apiFetch(url, options = {}) {
   const res = await fetch(url, { ...options, headers });
 
   if (res.status === 401) {
-    showLoginOverlay();
+    const data = await res.clone().json().catch(() => ({}));
+    if (data.setupRequired) {
+      showSetupOverlay();
+    } else {
+      showLoginOverlay();
+    }
     throw new Error('Nicht autorisiert');
   }
 
@@ -70,58 +86,137 @@ async function checkAuth() {
     const res = await apiFetch('/api/auth/status');
     const data = await res.json();
 
-    if (data.authRequired) {
-      if (data.authenticated) {
-        hideLoginOverlay();
-        logoutBtn.classList.remove('hidden');
-        initApp();
-      } else {
-        showLoginOverlay();
-      }
-    } else {
-      // Kein Passwort erforderlich
-      hideLoginOverlay();
-      logoutBtn.classList.add('hidden');
+    if (data.setupRequired) {
+      hideUserBadge();
+      showSetupOverlay();
+      return;
+    }
+
+    if (data.authenticated) {
+      hideAuthOverlay();
+      showUserBadge(data.user);
       initApp();
+    } else {
+      hideUserBadge();
+      showLoginOverlay();
     }
   } catch (err) {
+    // Falls Fehler, erneut prüfen ob Setup nötig ist
+    try {
+      const res = await fetch('/api/auth/status');
+      const data = await res.json();
+      if (data.setupRequired) {
+        showSetupOverlay();
+        return;
+      }
+    } catch {}
     showLoginOverlay();
   }
 }
 
+function showSetupOverlay() {
+  authOverlay.classList.remove('hidden');
+  setupCard.classList.remove('hidden');
+  loginCard.classList.add('hidden');
+  setupError.classList.add('hidden');
+  setupUsername.focus();
+}
+
 function showLoginOverlay() {
-  loginOverlay.classList.remove('hidden');
-  loginPassword.value = '';
-  loginPassword.focus();
+  authOverlay.classList.remove('hidden');
+  loginCard.classList.remove('hidden');
+  setupCard.classList.add('hidden');
+  loginError.classList.add('hidden');
+  loginUsername.focus();
 }
 
-function hideLoginOverlay() {
-  loginOverlay.classList.add('hidden');
+function hideAuthOverlay() {
+  authOverlay.classList.add('hidden');
+  setupCard.classList.add('hidden');
+  loginCard.classList.add('hidden');
+  setupError.classList.add('hidden');
   loginError.classList.add('hidden');
 }
 
-// Login Formular
-loginForm.addEventListener('submit', async (e) => {
+function showUserBadge(user) {
+  if (user && user.username) {
+    userName.textContent = user.username;
+    userBadge.classList.remove('hidden');
+  }
+  logoutBtn.classList.remove('hidden');
+}
+
+function hideUserBadge() {
+  userBadge.classList.add('hidden');
+  logoutBtn.classList.add('hidden');
+}
+
+// Setup Formular (Ersteinrichtung)
+setupForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const password = loginPassword.value;
-  loginError.classList.add('hidden');
+  const username = setupUsername.value.trim();
+  const password = setupPassword.value;
+  const confirm = setupPasswordConfirm.value;
+  setupError.classList.add('hidden');
+
+  if (password !== confirm) {
+    setupError.textContent = 'Passwörter stimmen nicht überein.';
+    setupError.classList.remove('hidden');
+    return;
+  }
+
+  if (password.length < 6) {
+    setupError.textContent = 'Passwort muss mindestens 6 Zeichen lang sein.';
+    setupError.classList.remove('hidden');
+    return;
+  }
 
   try {
-    const res = await fetch('/api/login', {
+    const res = await fetch('/api/auth/setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
+      body: JSON.stringify({ username, password })
     });
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || 'Falsches Passwort');
+      throw new Error(data.error || 'Fehler bei der Registrierung');
     }
 
     authToken = data.token;
     localStorage.setItem('redtune_auth', authToken);
-    hideLoginOverlay();
-    logoutBtn.classList.remove('hidden');
+    hideAuthOverlay();
+    showUserBadge(data.user);
+    initApp();
+  } catch (err) {
+    setupError.textContent = err.message;
+    setupError.classList.remove('hidden');
+  }
+});
+
+// Login Formular
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = loginUsername.value.trim();
+  const password = loginPassword.value;
+  loginError.classList.add('hidden');
+
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Ungültige Anmeldedaten');
+    }
+
+    authToken = data.token;
+    localStorage.setItem('redtune_auth', authToken);
+    hideAuthOverlay();
+    showUserBadge(data.user);
     initApp();
   } catch (err) {
     loginError.textContent = err.message;
@@ -132,12 +227,13 @@ loginForm.addEventListener('submit', async (e) => {
 // Logout
 logoutBtn.addEventListener('click', async () => {
   try {
-    await apiFetch('/api/logout', { method: 'POST' });
+    await apiFetch('/api/auth/logout', { method: 'POST' });
   } catch (e) {}
   authToken = '';
   localStorage.removeItem('redtune_auth');
   if (ws) ws.close();
-  showLoginOverlay();
+  hideUserBadge();
+  checkAuth();
 });
 
 // App initialisieren
@@ -168,7 +264,11 @@ function initWebSocket() {
       if (msg.type === 'status') {
         renderStatus(msg.data);
       } else if (msg.type === 'auth_required') {
-        showLoginOverlay();
+        if (msg.setupRequired) {
+          showSetupOverlay();
+        } else {
+          showLoginOverlay();
+        }
       }
     } catch (e) {
       console.error('[WS] Parse-Fehler:', e);
@@ -177,7 +277,7 @@ function initWebSocket() {
 
   ws.onclose = (event) => {
     if (event.code === 4401) {
-      showLoginOverlay();
+      checkAuth();
       return;
     }
     setTimeout(initWebSocket, 2500);

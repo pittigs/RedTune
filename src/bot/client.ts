@@ -18,7 +18,7 @@ export class TeamSpeakBot {
 
   constructor(
     public readonly config: BotConfig,
-    private readonly dataDir: string = './data'
+    public readonly dataDir: string = './data'
   ) {
     this.queue = new MusicQueue();
     this.resolver = new AudioResolver(config.audio.ytdlpPath);

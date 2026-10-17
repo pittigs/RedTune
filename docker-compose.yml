@@ -11,8 +11,6 @@ services:
       - TEAMSPEAK_NICKNAME=RedTune             # Name des Bots im TeamSpeak
       - TEAMSPEAK_CHANNEL=                     # Channel (z. B. "Musik" oder leer lassen)
       - TEAMSPEAK_CHANNEL_PASSWORD=            # Channelpasswort (falls geschützt)
-      # --- Web Dashboard Schutz ---
-      - WEB_PASSWORD=                          # Optional: Passwort für Web-Interface (z.B. MeinPasswort123)
     labels:
       traefik.enable: "true"
       traefik.docker.network: "traefik_proxy"
