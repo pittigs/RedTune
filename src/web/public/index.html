@@ -82,6 +82,61 @@
     </div>
   </div>
 
+  <!-- YouTube & Cookie Settings Modal -->
+  <div id="ytModal" class="login-overlay hidden">
+    <div class="login-card yt-modal-card">
+      <div class="login-icon yt-icon">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor">
+          <path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/>
+        </svg>
+      </div>
+      <h2>YouTube & Bot-Schutz</h2>
+      <p>Umgehe die YouTube Bot-Erkennung ("Sign in to confirm you're not a bot") mit deinen YouTube-Cookies.</p>
+
+      <div class="yt-status-box" id="ytStatusBox">
+        <span class="status-dot"></span>
+        <span id="ytStatusText">Lade Status...</span>
+      </div>
+
+      <div class="yt-instructions">
+        <strong>Kurzanleitung zum Einloggen:</strong>
+        <ol>
+          <li>Im Browser auf <a href="https://youtube.com" target="_blank" rel="noopener">youtube.com</a> anmelden.</li>
+          <li>Erweiterung <em>"Get cookies.txt LOCALLY"</em> öffnen & Cookies exportieren.</li>
+          <li>Den Inhalt hier hineinkopieren und auf <em>Speichern</em> klicken.</li>
+        </ol>
+      </div>
+
+      <form id="ytCookieForm">
+        <textarea 
+          id="ytCookieInput" 
+          rows="6" 
+          placeholder="# Netscape HTTP Cookie File&#10;# Hier den Inhalt der cookies.txt einfügen..."
+          spellcheck="false"
+        ></textarea>
+
+        <div id="ytFeedback" class="login-error hidden"></div>
+
+        <div class="modal-btn-row">
+          <button type="submit" id="ytSaveBtn" class="btn-primary">
+            <span>Cookies speichern</span>
+          </button>
+          <button type="button" id="ytTestBtn" class="btn-secondary">
+            <span>Verbindung testen</span>
+          </button>
+        </div>
+        <div class="modal-btn-row">
+          <button type="button" id="ytDeleteBtn" class="btn-secondary hidden" style="color: #ff3b30;">
+            <span>Cookies löschen</span>
+          </button>
+          <button type="button" id="ytCloseBtn" class="btn-secondary">
+            <span>Schließen</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="app-container">
     <!-- Header -->
     <header class="app-header">
@@ -113,6 +168,11 @@
           </svg>
           <span id="userName">User</span>
         </div>
+        <button id="ytSettingsBtn" class="btn-icon" title="YouTube & Cookie Einstellungen">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+          </svg>
+        </button>
         <button id="logoutBtn" class="btn-icon hidden" title="Abmelden">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
             <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>

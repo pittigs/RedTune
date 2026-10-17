@@ -473,5 +473,119 @@ window.removeQueueItem = async (index) => {
   await apiFetch(`/api/queue/${index}`, { method: 'DELETE' });
 };
 
+// --- YouTube & Cookie Settings Modal ---
+const ytModal = document.getElementById('ytModal');
+const ytSettingsBtn = document.getElementById('ytSettingsBtn');
+const ytCloseBtn = document.getElementById('ytCloseBtn');
+const ytStatusBox = document.getElementById('ytStatusBox');
+const ytStatusText = document.getElementById('ytStatusText');
+const ytCookieForm = document.getElementById('ytCookieForm');
+const ytCookieInput = document.getElementById('ytCookieInput');
+const ytFeedback = document.getElementById('ytFeedback');
+const ytTestBtn = document.getElementById('ytTestBtn');
+const ytDeleteBtn = document.getElementById('ytDeleteBtn');
+
+function showYtFeedback(msg, isSuccess = false) {
+  ytFeedback.textContent = msg;
+  ytFeedback.classList.remove('hidden');
+  if (isSuccess) {
+    ytFeedback.classList.add('yt-feedback-success');
+  } else {
+    ytFeedback.classList.remove('yt-feedback-success');
+  }
+}
+
+async function fetchYtStatus() {
+  try {
+    const res = await apiFetch('/api/youtube/status');
+    const data = await res.json();
+
+    if (data.hasCookies) {
+      ytStatusBox.classList.add('active');
+      ytStatusText.textContent = `Cookies aktiv (${data.lines} Einträge, ${Math.round(data.size / 1024)} KB)`;
+      ytDeleteBtn.classList.remove('hidden');
+    } else {
+      ytStatusBox.classList.remove('active');
+      ytStatusText.textContent = 'Keine Cookies hinterlegt (Client-Bypass aktiv)';
+      ytDeleteBtn.classList.add('hidden');
+    }
+  } catch (err) {
+    ytStatusText.textContent = 'Fehler beim Laden des Cookie-Status';
+  }
+}
+
+if (ytSettingsBtn) {
+  ytSettingsBtn.addEventListener('click', () => {
+    ytModal.classList.remove('hidden');
+    ytFeedback.classList.add('hidden');
+    fetchYtStatus();
+  });
+}
+
+if (ytCloseBtn) {
+  ytCloseBtn.addEventListener('click', () => {
+    ytModal.classList.add('hidden');
+  });
+}
+
+if (ytCookieForm) {
+  ytCookieForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const cookies = ytCookieInput.value.trim();
+    if (!cookies) {
+      showYtFeedback('Bitte füge den Inhalt deiner cookies.txt ein.', false);
+      return;
+    }
+
+    try {
+      const res = await apiFetch('/api/youtube/cookies', {
+        method: 'POST',
+        body: JSON.stringify({ cookies })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Fehler beim Speichern');
+      showYtFeedback(data.message || 'Cookies gespeichert!', true);
+      ytCookieInput.value = '';
+      fetchYtStatus();
+    } catch (err) {
+      showYtFeedback(err.message, false);
+    }
+  });
+}
+
+if (ytTestBtn) {
+  ytTestBtn.addEventListener('click', async () => {
+    ytTestBtn.disabled = true;
+    ytTestBtn.innerHTML = '<span>Prüfe...</span>';
+    showYtFeedback('Verbindungstest zu YouTube läuft...', true);
+
+    try {
+      const res = await apiFetch('/api/youtube/test', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Test fehlgeschlagen');
+      showYtFeedback(data.message, true);
+    } catch (err) {
+      showYtFeedback(err.message, false);
+    } finally {
+      ytTestBtn.disabled = false;
+      ytTestBtn.innerHTML = '<span>Verbindung testen</span>';
+    }
+  });
+}
+
+if (ytDeleteBtn) {
+  ytDeleteBtn.addEventListener('click', async () => {
+    if (!confirm('Möchtest du die gespeicherten YouTube Cookies wirklich löschen?')) return;
+    try {
+      const res = await apiFetch('/api/youtube/cookies', { method: 'DELETE' });
+      const data = await res.json();
+      showYtFeedback(data.message, true);
+      fetchYtStatus();
+    } catch (err) {
+      showYtFeedback(err.message, false);
+    }
+  });
+}
+
 // Start
 checkAuth();

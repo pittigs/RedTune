@@ -1,6 +1,7 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import http from 'node:http';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { TeamSpeakBot } from '../bot/client.js';
@@ -255,6 +256,75 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     }
     const ok = await bot.joinChannel(channel, password);
     res.json({ success: ok });
+  });
+
+  // YouTube / Cookie Management Endpunkte
+  const cookiesPath = path.join(bot.dataDir, 'cookies.txt');
+
+  app.get('/api/youtube/status', (_req: Request, res: Response) => {
+    try {
+      if (fs.existsSync(cookiesPath)) {
+        const stat = fs.statSync(cookiesPath);
+        const content = fs.readFileSync(cookiesPath, 'utf-8');
+        const lines = content.split('\n').filter(l => l.trim().length > 0 && !l.startsWith('#')).length;
+        return res.json({
+          hasCookies: true,
+          size: stat.size,
+          lines,
+          modified: stat.mtime
+        });
+      }
+    } catch (e) {
+      console.error('[Web] Fehler beim Abfragen der Cookies:', e);
+    }
+    res.json({ hasCookies: false });
+  });
+
+  app.post('/api/youtube/cookies', (req: Request, res: Response) => {
+    const { cookies } = req.body;
+    if (typeof cookies !== 'string' || cookies.trim().length === 0) {
+      return res.status(400).json({ error: 'Keine Cookies übermittelt.' });
+    }
+
+    try {
+      fs.writeFileSync(cookiesPath, cookies.trim(), 'utf-8');
+      console.log(`[Web] Neue cookies.txt mit ${cookies.length} Zeichen gespeichert.`);
+      res.json({ success: true, message: 'Cookies erfolgreich gespeichert!' });
+    } catch (err) {
+      res.status(500).json({ error: `Fehler beim Speichern: ${(err as Error).message}` });
+    }
+  });
+
+  app.delete('/api/youtube/cookies', (_req: Request, res: Response) => {
+    try {
+      if (fs.existsSync(cookiesPath)) {
+        fs.unlinkSync(cookiesPath);
+        console.log('[Web] cookies.txt gelöscht.');
+      }
+      res.json({ success: true, message: 'Cookies wurden gelöscht.' });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/youtube/test', async (_req: Request, res: Response) => {
+    try {
+      console.log('[Web] Starte YouTube Verbindungstest...');
+      const tracks = await bot.resolver.resolve('ytsearch1:music test', 'Diagnostic Test');
+      if (tracks.length > 0) {
+        res.json({
+          success: true,
+          message: `Verbindung erfolgreich! Test-Titel gefunden: "${tracks[0].title}"`
+        });
+      } else {
+        res.status(404).json({ success: false, error: 'Keine Antwort von YouTube erhalten.' });
+      }
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        error: (err as Error).message
+      });
+    }
   });
 
   server.listen(port, () => {

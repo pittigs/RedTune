@@ -21,7 +21,7 @@ export class TeamSpeakBot {
     public readonly dataDir: string = './data'
   ) {
     this.queue = new MusicQueue();
-    this.resolver = new AudioResolver(config.audio.ytdlpPath);
+    this.resolver = new AudioResolver(config.audio.ytdlpPath, this.dataDir);
 
     // Initialisiert den AudioPlayer mit unserem voiceSender Hook
     this.player = new AudioPlayer(
@@ -35,7 +35,8 @@ export class TeamSpeakBot {
         }
       },
       config.audio.ffmpegPath,
-      config.audio.ytdlpPath
+      config.audio.ytdlpPath,
+      this.dataDir
     );
 
     this.player.volume = config.audio.defaultVolume;

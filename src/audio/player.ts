@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { PassThrough } from 'node:stream';
+import fs from 'node:fs';
+import path from 'node:path';
 import OpusScript from 'opusscript';
 import { Codec } from '@honeybbq/teamspeak';
 import type { Track } from './queue.js';
@@ -31,7 +33,8 @@ export class AudioPlayer {
   constructor(
     private readonly voiceSender: VoiceSender,
     private readonly ffmpegPath: string = 'ffmpeg',
-    private readonly ytdlpPath: string = 'yt-dlp'
+    private readonly ytdlpPath: string = 'yt-dlp',
+    private readonly dataDir: string = './data'
   ) {
     // OpusScript Encoder für 48 kHz Stereo Musik (Application AUDIO = 2049)
     this.encoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
@@ -65,7 +68,7 @@ export class AudioPlayer {
         'pipe:1'
       ];
 
-      const ff = spawn(this.ffmpegPath, ffArgs, { stdio: ['pipe', 'pipe', 'ignore'] });
+      const ff = spawn(this.ffmpegPath, ffArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
       this.currentProcessFf = ff;
 
       ff.stdout.pipe(pcm);
@@ -74,32 +77,63 @@ export class AudioPlayer {
         pcm.end();
       });
 
+      let ffStderr = '';
+      ff.stderr?.on('data', (chunk) => {
+        ffStderr += chunk.toString();
+      });
+      ff.on('close', (code) => {
+        if (code !== 0 && code !== null) {
+          console.error(`[Player] ffmpeg beendet mit Code ${code}:`, ffStderr.trim());
+        }
+      });
+
       // 2. yt-dlp Prozess starten (streamt den YouTube Music / YouTube Audiotrack in ffmpeg stdin)
+      const cookiesFile = path.join(this.dataDir, 'cookies.txt');
       const ytArgs = [
         '--no-playlist',
         '--no-warnings',
-        '-q',
+        '--extractor-args', 'youtube:player_client=ios,android,web',
         '-f', 'bestaudio[ext=webm]/bestaudio/best',
         '--socket-timeout', '15',
         '-o', '-',
-        '--',
-        track.url
       ];
 
-      const yt = spawn(this.ytdlpPath, ytArgs, { stdio: ['ignore', 'pipe', 'ignore'] });
+      if (fs.existsSync(cookiesFile)) {
+        try {
+          const stat = fs.statSync(cookiesFile);
+          if (stat.size > 0) {
+            ytArgs.push('--cookies', cookiesFile);
+          }
+        } catch {}
+      }
+
+      ytArgs.push('--', track.url);
+
+      const yt = spawn(this.ytdlpPath, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
       this.currentProcessYt = yt;
 
       yt.stdout.pipe(ff.stdin);
       yt.stdout.on('error', () => {});
       ff.stdin.on('error', () => {});
 
+      let ytStderr = '';
+      yt.stderr?.on('data', (chunk) => {
+        ytStderr += chunk.toString();
+      });
+
+      yt.on('close', (code) => {
+        if (code !== 0 && code !== null) {
+          console.error(`[Player] yt-dlp beendet mit Code ${code}. Details:`, ytStderr.trim() || 'Keine Fehlerausgabe');
+        }
+      });
+
       yt.on('error', (err) => {
-        console.error('[Player] yt-dlp Fehler:', err.message);
+        console.error('[Player] yt-dlp Prozessfehler:', err.message);
         this.handleEnd();
       });
 
       ff.on('error', (err) => {
-        console.error('[Player] ffmpeg Fehler:', err.message);
+        console.error('[Player] ffmpeg Prozessfehler:', err.message);
         this.handleEnd();
       });
 

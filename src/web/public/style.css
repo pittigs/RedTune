@@ -663,3 +663,104 @@ body {
 .user-badge svg {
   color: var(--primary);
 }
+
+/* YouTube Modal Styles */
+.yt-modal-card {
+  max-width: 520px;
+  text-align: left;
+}
+
+.yt-modal-card h2,
+.yt-modal-card > p {
+  text-align: center;
+}
+
+.yt-modal-card .login-icon {
+  display: flex;
+  margin: 0 auto 16px auto;
+}
+
+.yt-icon {
+  background: linear-gradient(135deg, #ff0000, #cc0000);
+  box-shadow: 0 6px 20px rgba(255, 0, 0, 0.35);
+}
+
+.yt-status-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+  font-size: 0.85rem;
+}
+
+.yt-status-box.active {
+  border-color: rgba(48, 209, 88, 0.4);
+  background: rgba(48, 209, 88, 0.08);
+}
+
+.yt-status-box.active .status-dot {
+  background: #30d158;
+  box-shadow: 0 0 10px #30d158;
+}
+
+.yt-instructions {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.yt-instructions ol {
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+
+.yt-instructions a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.yt-modal-card textarea {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  color: var(--text-main);
+  font-family: monospace;
+  font-size: 0.8rem;
+  outline: none;
+  resize: vertical;
+  min-height: 110px;
+  transition: var(--transition);
+}
+
+.yt-modal-card textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+.modal-btn-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.modal-btn-row button {
+  flex: 1;
+  padding: 12px;
+  font-size: 0.85rem;
+}
+
+.yt-feedback-success {
+  color: #30d158 !important;
+  background: rgba(48, 209, 88, 0.1) !important;
+  border-color: rgba(48, 209, 88, 0.3) !important;
+}
