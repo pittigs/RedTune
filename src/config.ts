@@ -17,6 +17,7 @@ export interface BotConfig {
   web: {
     enabled: boolean;
     port: number;
+    password?: string;
   };
   bot: {
     commandPrefix: string;
@@ -39,7 +40,8 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   web: {
     enabled: true,
-    port: 58913
+    port: 58913,
+    password: ''
   },
   bot: {
     commandPrefix: '!',
@@ -75,6 +77,7 @@ export function loadConfig(configPath: string): BotConfig {
   if (process.env.TEAMSPEAK_NICKNAME) cfg.server.nickname = process.env.TEAMSPEAK_NICKNAME;
   if (process.env.TEAMSPEAK_CHANNEL) cfg.server.channel = process.env.TEAMSPEAK_CHANNEL;
   if (process.env.TEAMSPEAK_CHANNEL_PASSWORD) cfg.server.channelPassword = process.env.TEAMSPEAK_CHANNEL_PASSWORD;
+  if (process.env.WEB_PASSWORD) cfg.web.password = process.env.WEB_PASSWORD;
 
   return cfg;
 }

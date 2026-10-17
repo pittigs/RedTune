@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Client, generateIdentitySync, parseIdentity, type Identity } from '@honeybbq/teamspeak/client';
-import { escape, Codec, ClientStatus } from '@honeybbq/teamspeak';
+import { escape, Codec, ClientStatus, listChannels, moveClient } from '@honeybbq/teamspeak';
 import type { BotConfig } from '../config.js';
 import { AudioPlayer } from '../audio/player.js';
 import { MusicQueue } from '../audio/queue.js';
@@ -17,7 +17,7 @@ export class TeamSpeakBot {
   public commandHandler!: CommandHandler;
 
   constructor(
-    private readonly config: BotConfig,
+    public readonly config: BotConfig,
     private readonly dataDir: string = './data'
   ) {
     this.queue = new MusicQueue();
@@ -55,7 +55,8 @@ export class TeamSpeakBot {
       this.player,
       this.queue,
       this.resolver,
-      config.bot.commandPrefix
+      config.bot.commandPrefix,
+      (targetChannel: string) => this.joinChannel(targetChannel)
     );
   }
 
@@ -83,9 +84,11 @@ export class TeamSpeakBot {
       await this.client.connect({ signal: AbortSignal.timeout(25_000) });
       console.log(`[Bot] ✔ Erfolgreich mit TeamSpeak verbunden! Client-ID: ${this.client.clientID}`);
 
-      // Channel beitreten falls konfiguriert
+      // Channel beitreten falls konfiguriert (mit 1.5s Verzögerung für Server-Sync)
       if (this.config.server.channel) {
-        await this.joinChannel(this.config.server.channel, this.config.server.channelPassword);
+        setTimeout(async () => {
+          await this.joinChannel(this.config.server.channel!, this.config.server.channelPassword);
+        }, 1500);
       }
     } catch (err) {
       console.error('[Bot] Verbindungsfehler:', (err as Error).message);
@@ -145,29 +148,47 @@ export class TeamSpeakBot {
     }
   }
 
-  private async joinChannel(channelTarget: string, password?: string): Promise<void> {
-    if (!this.client) return;
-    try {
-      // Channels abfragen
-      const res = await this.client.exec('channellist');
-      let targetCid: string | undefined;
+  public async joinChannel(channelTarget: string, password?: string): Promise<boolean> {
+    if (!this.client || this.client.status !== ClientStatus.Connected) {
+      console.warn('[Bot] Kann Channel nicht beitreten: Nicht verbunden.');
+      return false;
+    }
 
-      for (const ch of res) {
-        if (ch['channel_name']?.toLowerCase() === channelTarget.toLowerCase() || ch['cid'] === channelTarget) {
-          targetCid = ch['cid'];
-          break;
-        }
+    try {
+      console.log(`[Bot] Suche Channel: "${channelTarget}"...`);
+      const channels = await listChannels(this.client, { timeoutMs: 10_000 });
+      const targetLower = channelTarget.trim().toLowerCase();
+
+      // 1. Suche nach exaktem Channel-Namen oder Channel-ID
+      let targetCh = channels.find(
+        (ch) =>
+          ch.name.trim().toLowerCase() === targetLower ||
+          String(ch.id) === channelTarget.trim()
+      );
+
+      // 2. Falls nicht gefunden, suche nach Teilübereinstimmung
+      if (!targetCh) {
+        targetCh = channels.find((ch) =>
+          ch.name.toLowerCase().includes(targetLower)
+        );
       }
 
-      if (targetCid) {
-        const pwParam = password ? ` channel_password=${escape(password)}` : '';
-        await this.client.exec(`clientmove cid=${targetCid} clid=${this.client.clientID}${pwParam}`);
-        console.log(`[Bot] In Channel #${targetCid} gewechselt.`);
+      if (targetCh) {
+        console.log(`[Bot] Wechsle in Channel "${targetCh.name}" (ID: ${targetCh.id})...`);
+        await moveClient(this.client, this.client.clientID, targetCh.id, {
+          password: password || undefined,
+          timeoutMs: 10_000,
+        });
+        console.log(`[Bot] ✔ Erfolgreich in Channel "${targetCh.name}" gewechselt.`);
+        return true;
       } else {
-        console.warn(`[Bot] Konnte Zielchannel "${channelTarget}" nicht finden.`);
+        console.warn(`[Bot] ❌ Channel "${channelTarget}" nicht gefunden.`);
+        console.log(`[Bot] Gefundene Channels:`, channels.map((c) => c.name).join(', '));
+        return false;
       }
     } catch (err) {
-      console.warn('[Bot] Fehler beim Wechseln in Channel:', (err as Error).message);
+      console.error('[Bot] Fehler beim Wechseln in Channel:', (err as Error).message);
+      return false;
     }
   }
 

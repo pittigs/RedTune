@@ -1,9 +1,15 @@
-// TeamSpeak 6 YouTube Music Bot Web Dashboard Client
+// RedTune – TeamSpeak 6 YouTube Music Bot Web Dashboard Client
 
 const connectionBadge = document.getElementById('connectionBadge');
 const connectionText = document.getElementById('connectionText');
 const botStatusText = document.getElementById('botStatusText');
 const serverText = document.getElementById('serverText');
+const logoutBtn = document.getElementById('logoutBtn');
+
+const loginOverlay = document.getElementById('loginOverlay');
+const loginForm = document.getElementById('loginForm');
+const loginPassword = document.getElementById('loginPassword');
+const loginError = document.getElementById('loginError');
 
 const searchForm = document.getElementById('searchForm');
 const searchInput = document.getElementById('searchInput');
@@ -35,16 +41,125 @@ const clearQueueBtn = document.getElementById('clearQueueBtn');
 
 let currentStatus = null;
 let ws = null;
+let authToken = localStorage.getItem('redtune_auth') || '';
 
-// Initialisierung
+// Authentifizierter Fetch Helper
+async function apiFetch(url, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {})
+  };
+
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`;
+  }
+
+  const res = await fetch(url, { ...options, headers });
+
+  if (res.status === 401) {
+    showLoginOverlay();
+    throw new Error('Nicht autorisiert');
+  }
+
+  return res;
+}
+
+// Authentifizierung prüfen
+async function checkAuth() {
+  try {
+    const res = await apiFetch('/api/auth/status');
+    const data = await res.json();
+
+    if (data.authRequired) {
+      if (data.authenticated) {
+        hideLoginOverlay();
+        logoutBtn.classList.remove('hidden');
+        initApp();
+      } else {
+        showLoginOverlay();
+      }
+    } else {
+      // Kein Passwort erforderlich
+      hideLoginOverlay();
+      logoutBtn.classList.add('hidden');
+      initApp();
+    }
+  } catch (err) {
+    showLoginOverlay();
+  }
+}
+
+function showLoginOverlay() {
+  loginOverlay.classList.remove('hidden');
+  loginPassword.value = '';
+  loginPassword.focus();
+}
+
+function hideLoginOverlay() {
+  loginOverlay.classList.add('hidden');
+  loginError.classList.add('hidden');
+}
+
+// Login Formular
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const password = loginPassword.value;
+  loginError.classList.add('hidden');
+
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Falsches Passwort');
+    }
+
+    authToken = data.token;
+    localStorage.setItem('redtune_auth', authToken);
+    hideLoginOverlay();
+    logoutBtn.classList.remove('hidden');
+    initApp();
+  } catch (err) {
+    loginError.textContent = err.message;
+    loginError.classList.remove('hidden');
+  }
+});
+
+// Logout
+logoutBtn.addEventListener('click', async () => {
+  try {
+    await apiFetch('/api/logout', { method: 'POST' });
+  } catch (e) {}
+  authToken = '';
+  localStorage.removeItem('redtune_auth');
+  if (ws) ws.close();
+  showLoginOverlay();
+});
+
+// App initialisieren
+function initApp() {
+  fetchStatus();
+  initWebSocket();
+}
+
+// WebSocket mit Auth Token
 function initWebSocket() {
+  if (ws) {
+    try { ws.close(); } catch (e) {}
+  }
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}`;
+  const tokenParam = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
+  const wsUrl = `${protocol}//${window.location.host}${tokenParam}`;
 
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    console.log('[WS] Verbunden mit Dashboard Server');
+    console.log('[WS] Verbunden mit RedTune Dashboard');
   };
 
   ws.onmessage = (event) => {
@@ -52,22 +167,27 @@ function initWebSocket() {
       const msg = JSON.parse(event.data);
       if (msg.type === 'status') {
         renderStatus(msg.data);
+      } else if (msg.type === 'auth_required') {
+        showLoginOverlay();
       }
     } catch (e) {
       console.error('[WS] Parse-Fehler:', e);
     }
   };
 
-  ws.onclose = () => {
-    console.log('[WS] Verbindung verloren, versuche Reconnect in 2s...');
-    setTimeout(initWebSocket, 2000);
+  ws.onclose = (event) => {
+    if (event.code === 4401) {
+      showLoginOverlay();
+      return;
+    }
+    setTimeout(initWebSocket, 2500);
   };
 }
 
-// Initialer Status per REST holen
+// Status per REST holen
 async function fetchStatus() {
   try {
-    const res = await fetch('/api/status');
+    const res = await apiFetch('/api/status');
     const data = await res.json();
     renderStatus(data);
   } catch (err) {
@@ -79,7 +199,6 @@ async function fetchStatus() {
 function renderStatus(status) {
   currentStatus = status;
 
-  // Verbindungs-Badge
   if (status.connected) {
     connectionBadge.classList.add('connected');
     connectionText.textContent = 'Online';
@@ -92,7 +211,6 @@ function renderStatus(status) {
 
   serverText.textContent = status.server || 'Server';
 
-  // Player Details
   const player = status.player;
   if (player && player.currentTrack) {
     trackTitle.textContent = player.currentTrack.title;
@@ -107,7 +225,6 @@ function renderStatus(status) {
       albumArtPlaceholder.classList.remove('hidden');
     }
 
-    // Fortschrittsbalken
     const curSec = player.positionSec || 0;
     const durSec = player.currentTrack.durationSec || 0;
     currentTime.textContent = formatTime(curSec);
@@ -116,7 +233,6 @@ function renderStatus(status) {
     const percent = durSec > 0 ? Math.min(100, (curSec / durSec) * 100) : 0;
     progressBarFill.style.width = `${percent}%`;
 
-    // Play/Pause Icon
     if (player.isPlaying && !player.isPaused) {
       playIcon.classList.add('hidden');
       pauseIcon.classList.remove('hidden');
@@ -136,18 +252,16 @@ function renderStatus(status) {
     pauseIcon.classList.add('hidden');
   }
 
-  // Lautstärke
   if (player && typeof player.volume === 'number') {
     volumeSlider.value = player.volume;
     volumeValue.textContent = `${player.volume}%`;
   }
 
-  // Warteschlange
   renderQueue(status.queue?.items || []);
 }
 
 function renderQueue(items) {
-  queueCount.textContent = `${items.length} ${items.length === 1 ? 'Titel' : 'Titel'}`;
+  queueCount.textContent = `${items.length} Titel`;
 
   if (items.length === 0) {
     queueList.innerHTML = `
@@ -175,7 +289,6 @@ function renderQueue(items) {
   `).join('');
 }
 
-// Zeitformatierung mm:ss
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
@@ -198,9 +311,8 @@ searchForm.addEventListener('submit', async (e) => {
   searchButton.innerHTML = '<span>Lade...</span>';
 
   try {
-    const res = await fetch('/api/play', {
+    const res = await apiFetch('/api/play', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query })
     });
     const data = await res.json();
@@ -219,22 +331,22 @@ playPauseBtn.addEventListener('click', async () => {
   const player = currentStatus.player;
 
   if (player.isPlaying && !player.isPaused) {
-    await fetch('/api/pause', { method: 'POST' });
+    await apiFetch('/api/pause', { method: 'POST' });
   } else {
-    await fetch('/api/resume', { method: 'POST' });
+    await apiFetch('/api/resume', { method: 'POST' });
   }
 });
 
 nextBtn.addEventListener('click', async () => {
-  await fetch('/api/skip', { method: 'POST' });
+  await apiFetch('/api/skip', { method: 'POST' });
 });
 
 prevBtn.addEventListener('click', async () => {
-  await fetch('/api/previous', { method: 'POST' });
+  await apiFetch('/api/previous', { method: 'POST' });
 });
 
 stopBtn.addEventListener('click', async () => {
-  await fetch('/api/stop', { method: 'POST' });
+  await apiFetch('/api/stop', { method: 'POST' });
 });
 
 volumeSlider.addEventListener('input', (e) => {
@@ -243,25 +355,23 @@ volumeSlider.addEventListener('input', (e) => {
 
 volumeSlider.addEventListener('change', async (e) => {
   const volume = parseInt(e.target.value, 10);
-  await fetch('/api/volume', {
+  await apiFetch('/api/volume', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ volume })
   });
 });
 
 shuffleBtn.addEventListener('click', async () => {
-  await fetch('/api/queue/shuffle', { method: 'POST' });
+  await apiFetch('/api/queue/shuffle', { method: 'POST' });
 });
 
 clearQueueBtn.addEventListener('click', async () => {
-  await fetch('/api/queue/clear', { method: 'POST' });
+  await apiFetch('/api/queue/clear', { method: 'POST' });
 });
 
 window.removeQueueItem = async (index) => {
-  await fetch(`/api/queue/${index}`, { method: 'DELETE' });
+  await apiFetch(`/api/queue/${index}`, { method: 'DELETE' });
 };
 
 // Start
-fetchStatus();
-initWebSocket();
+checkAuth();

@@ -1,6 +1,7 @@
-import express, { type Request, type Response } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import http from 'node:http';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { TeamSpeakBot } from '../bot/client.js';
@@ -13,8 +14,73 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
 
+  const activeTokens = new Set<string>();
+  const isAuthRequired = () => Boolean(bot.config.web.password && bot.config.web.password.trim().length > 0);
+
+  function getRequestToken(req: Request): string | undefined {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      return authHeader.slice(7).trim();
+    }
+    const customHeader = req.headers['x-auth-token'];
+    if (typeof customHeader === 'string') {
+      return customHeader.trim();
+    }
+    return undefined;
+  }
+
+  function isAuthenticated(req: Request): boolean {
+    if (!isAuthRequired()) return true;
+    const token = getRequestToken(req);
+    return Boolean(token && activeTokens.has(token));
+  }
+
   app.use(express.json());
   app.use(express.static(path.join(__dirname, 'public')));
+
+  // Auth Middleware für geschützte API Endpunkte
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    // Öffentliche Auth-Endpunkte
+    if (req.path === '/login' || req.path === '/auth/status') {
+      return next();
+    }
+
+    if (!isAuthenticated(req)) {
+      return res.status(401).json({ error: 'Nicht autorisiert. Bitte einloggen.' });
+    }
+
+    next();
+  });
+
+  // Auth Endpunkte
+  app.get('/api/auth/status', (req: Request, res: Response) => {
+    res.json({
+      authRequired: isAuthRequired(),
+      authenticated: isAuthenticated(req)
+    });
+  });
+
+  app.post('/api/login', (req: Request, res: Response) => {
+    const { password } = req.body;
+    if (!isAuthRequired()) {
+      return res.json({ success: true, token: 'open' });
+    }
+
+    if (password && password === bot.config.web.password) {
+      const token = crypto.randomBytes(32).toString('hex');
+      activeTokens.add(token);
+      console.log('[Web-Auth] Erfolgreiche Anmeldung, neuer Token generiert.');
+      return res.json({ success: true, token });
+    }
+
+    res.status(401).json({ error: 'Falsches Passwort' });
+  });
+
+  app.post('/api/logout', (req: Request, res: Response) => {
+    const token = getRequestToken(req);
+    if (token) activeTokens.delete(token);
+    res.json({ success: true });
+  });
 
   // WebSocket Broadcast bei Statusänderung
   const broadcast = () => {
@@ -28,11 +94,23 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
 
   bot.player.onStateChange = broadcast;
 
-  wss.on('connection', (ws) => {
+  // WebSocket Verbindung mit Token-Prüfung
+  wss.on('connection', (ws, req) => {
+    if (isAuthRequired()) {
+      const parsedUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+      const token = parsedUrl.searchParams.get('token');
+
+      if (!token || !activeTokens.has(token)) {
+        ws.send(JSON.stringify({ type: 'auth_required' }));
+        ws.close(4401, 'Unauthorized');
+        return;
+      }
+    }
+
     ws.send(JSON.stringify({ type: 'status', data: bot.getStatus() }));
   });
 
-  // REST API Routen
+  // Player & Queue Endpunkte
   app.get('/api/status', (_req: Request, res: Response) => {
     res.json(bot.getStatus());
   });
@@ -137,8 +215,18 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     res.json({ success: true });
   });
 
+  // Channel wechseln über Web Dashboard
+  app.post('/api/channel', async (req: Request, res: Response) => {
+    const { channel, password } = req.body;
+    if (!channel) {
+      return res.status(400).json({ error: 'Channel-Name oder ID fehlt' });
+    }
+    const ok = await bot.joinChannel(channel, password);
+    res.json({ success: ok });
+  });
+
   server.listen(port, () => {
-    console.log(`[Web] Dashboard läuft auf http://0.0.0.0:${port}`);
+    console.log(`[Web] Dashboard läuft auf http://0.0.0.0:${port} (Passwort-Schutz: ${isAuthRequired() ? 'Aktiv' : 'Deaktiviert'})`);
   });
 
   return server;

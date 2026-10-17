@@ -14,7 +14,8 @@ export class CommandHandler {
     private readonly player: AudioPlayer,
     private readonly queue: MusicQueue,
     private readonly resolver: AudioResolver,
-    private readonly prefix: string = '!'
+    private readonly prefix: string = '!',
+    public onJoinChannel?: (channel: string) => Promise<boolean>
   ) {}
 
   async handle(rawMessage: string, ctx: CommandContext): Promise<void> {
@@ -91,6 +92,23 @@ export class CommandHandler {
         case 'clear':
           this.queue.clear();
           await ctx.reply('🗑 Warteschlange wurde geleert.');
+          break;
+
+        case 'join':
+        case 'move':
+        case 'channel':
+          if (!argText) {
+            await ctx.reply('ℹ Bitte gib den Channel-Namen an: `!join <Channel-Name>`');
+            return;
+          }
+          if (this.onJoinChannel) {
+            const ok = await this.onJoinChannel(argText);
+            if (ok) {
+              await ctx.reply(`✔ In Channel "${argText}" gewechselt.`);
+            } else {
+              await ctx.reply(`❌ Konnte Channel "${argText}" nicht finden oder beitreten.`);
+            }
+          }
           break;
 
         case 'help':
@@ -256,6 +274,7 @@ export class CommandHandler {
       `• \`${p}np\` - Details zum aktuellen Song\n` +
       `• \`${p}shuffle\` - Warteschlange mischen\n` +
       `• \`${p}loop <off|track|queue>\` - Wiederholungsmodus\n` +
+      `• \`${p}join <Channel>\` - Bot in einen bestimmten Channel bewegen\n` +
       `• \`${p}clear\` - Warteschlange leeren`
     );
   }
