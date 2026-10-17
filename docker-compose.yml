@@ -5,6 +5,12 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Europe/Berlin
+      # --- TeamSpeak Verbindungsdaten ---
+      - TEAMSPEAK_ADDR=ts.deinedomain.de:9987   # IP oder Domain des TeamSpeak Servers
+      - TEAMSPEAK_PASSWORD=                    # Serverpasswort (falls vorhanden)
+      - TEAMSPEAK_NICKNAME=RedTune             # Name des Bots im TeamSpeak
+      - TEAMSPEAK_CHANNEL=                     # Channel (z. B. "Musik" oder leer lassen)
+      - TEAMSPEAK_CHANNEL_PASSWORD=            # Channelpasswort (falls geschützt)
     labels:
       traefik.enable: "true"
       traefik.docker.network: "traefik_proxy"
