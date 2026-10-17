@@ -12,12 +12,8 @@ export function getYtdlpAuthArgs(dataDir: string): string[] {
   }
   args.push('--cache-dir', cacheDir);
 
-  const oauthMarker = path.join(dataDir, 'oauth_enabled');
   const cookiesFile = path.join(dataDir, 'cookies.txt');
-
-  if (fs.existsSync(oauthMarker)) {
-    args.push('--username', 'oauth2', '--password', '');
-  } else if (fs.existsSync(cookiesFile)) {
+  if (fs.existsSync(cookiesFile)) {
     try {
       const stat = fs.statSync(cookiesFile);
       if (stat.size > 0) {
@@ -29,6 +25,12 @@ export function getYtdlpAuthArgs(dataDir: string): string[] {
   return args;
 }
 
-export function isOAuthEnabled(dataDir: string): boolean {
-  return fs.existsSync(path.join(dataDir, 'oauth_enabled'));
+export function hasCookiesFile(dataDir: string): boolean {
+  const cookiesFile = path.join(dataDir, 'cookies.txt');
+  if (!fs.existsSync(cookiesFile)) return false;
+  try {
+    return fs.statSync(cookiesFile).size > 0;
+  } catch {
+    return false;
+  }
 }

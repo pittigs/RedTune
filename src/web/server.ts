@@ -8,7 +8,6 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { TeamSpeakBot } from '../bot/client.js';
 import { UserManager } from '../auth/users.js';
-import { OAuthManager } from '../audio/oauth.js';
 import { getYtdlpAuthArgs } from '../audio/auth-args.js';
 
 const execFileAsync = promisify(execFile);
@@ -22,7 +21,6 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
   const wss = new WebSocketServer({ server });
 
   const userManager = new UserManager(bot.dataDir);
-  const oauthManager = new OAuthManager(bot.dataDir);
 
   function getRequestToken(req: Request): string | undefined {
     const authHeader = req.headers.authorization;
@@ -266,7 +264,7 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     res.json({ success: ok });
   });
 
-  // YouTube / Cookie & OAuth Management Endpunkte
+  // YouTube / Cookie Management Endpunkte
   const cookiesPath = path.join(bot.dataDir, 'cookies.txt');
 
   app.get('/api/youtube/status', (_req: Request, res: Response) => {
@@ -276,9 +274,11 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
         const stat = fs.statSync(cookiesPath);
         const content = fs.readFileSync(cookiesPath, 'utf-8');
         const lines = content.split('\n').filter(l => l.trim().length > 0 && !l.startsWith('#')).length;
+        const hasAuthCookie = content.includes('LOGIN_INFO') || content.includes('SAPISID') || content.includes('SID');
         cookiesInfo = {
           size: stat.size,
           lines,
+          hasAuthCookie,
           modified: stat.mtime
         };
       }
@@ -286,31 +286,10 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
       console.error('[Web] Fehler beim Abfragen der Cookies:', e);
     }
 
-    const oauth = oauthManager.getStatus();
-
     res.json({
-      hasCookies: Boolean(cookiesInfo),
-      cookiesInfo,
-      oauth
+      hasCookies: Boolean(cookiesInfo && cookiesInfo.size > 0),
+      cookiesInfo
     });
-  });
-
-  // Google OAuth Flow starten
-  app.post('/api/youtube/oauth/start', async (_req: Request, res: Response) => {
-    try {
-      console.log('[Web] Starte Google Device-Code OAuth Flow...');
-      const authData = await oauthManager.startFlow(bot.config.audio.ytdlpPath);
-      res.json({ success: true, ...authData });
-    } catch (err: any) {
-      console.error('[Web] OAuth Fehler:', err);
-      res.status(500).json({ error: err?.message || 'Fehler beim Starten der Google-Anmeldung' });
-    }
-  });
-
-  // Google OAuth trennen
-  app.post('/api/youtube/oauth/disconnect', (_req: Request, res: Response) => {
-    oauthManager.disconnect();
-    res.json({ success: true });
   });
 
   // Cookies speichern
@@ -320,9 +299,17 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
       return res.status(400).json({ error: 'Keine Cookies übermittelt.' });
     }
 
+    const trimmed = cookies.trim();
+    // Prüfen ob es wie eine Netscape cookie file aussieht
+    if (!trimmed.includes('.youtube.com') && !trimmed.includes('youtube.com')) {
+      return res.status(400).json({
+        error: 'Die Cookies scheinen nicht von YouTube zu stammen (Domain .youtube.com fehlt). Bitte öffne YouTube im Browser und exportiere die Cookies dort.'
+      });
+    }
+
     try {
-      fs.writeFileSync(cookiesPath, cookies.trim(), 'utf-8');
-      console.log(`[Web] Neue cookies.txt mit ${cookies.length} Zeichen gespeichert.`);
+      fs.writeFileSync(cookiesPath, trimmed, 'utf-8');
+      console.log(`[Web] Neue cookies.txt mit ${trimmed.length} Zeichen gespeichert.`);
       res.json({ success: true, message: 'Cookies erfolgreich gespeichert!' });
     } catch (err) {
       res.status(500).json({ error: `Fehler beim Speichern: ${(err as Error).message}` });
@@ -345,7 +332,7 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
   // Echter Stream-Verbindungstest mit unzensierter Fehlerausgabe
   app.post('/api/youtube/test', async (_req: Request, res: Response) => {
     try {
-      console.log('[Web] Starte YouTube Verbindungstest (Videotest)...');
+      console.log('[Web] Starte YouTube Verbindungstest mit cookies.txt...');
       const testArgs = [
         '--dump-single-json',
         '--no-warnings',
@@ -359,7 +346,7 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
       const data = JSON.parse(stdout);
       res.json({
         success: true,
-        message: `✔ Verbindung erfolgreich! Stream autorisiert für: "${data.title}"`
+        message: `✔ Verbindung erfolgreich! Video autorisiert: "${data.title}"`
       });
     } catch (err: any) {
       const stderr = err?.stderr || '';

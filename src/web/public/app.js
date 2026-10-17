@@ -420,7 +420,7 @@ searchForm.addEventListener('submit', async (e) => {
     searchInput.value = '';
   } catch (err) {
     if (err.message.includes('Sign in') || err.message.includes('bot') || err.message.includes('Bot-Erkennung') || err.message.includes('Anmeldung')) {
-      showYtFeedback('YouTube verlangt eine einmalige Anmeldung bei Google (Bot-Schutz). Bitte klicke auf "Google Device-Code anfordern" und bestätige den Code bei Google.', false);
+      showYtFeedback('YouTube verlangt eine Verifizierung per cookies.txt, da der Server als Bot eingestuft wird. Bitte lade deine cookies.txt hoch.', false);
       ytModal.classList.remove('hidden');
       fetchYtStatus();
     } else {
@@ -486,21 +486,13 @@ const ytCloseBtn = document.getElementById('ytCloseBtn');
 const ytStatusBox = document.getElementById('ytStatusBox');
 const ytStatusText = document.getElementById('ytStatusText');
 
-const oauthIdleBox = document.getElementById('oauthIdleBox');
-const oauthStartBtn = document.getElementById('oauthStartBtn');
-const oauthPendingBox = document.getElementById('oauthPendingBox');
-const oauthUrlLink = document.getElementById('oauthUrlLink');
-const oauthCodeDisplay = document.getElementById('oauthCodeDisplay');
-const oauthConnectedBox = document.getElementById('oauthConnectedBox');
-const oauthDisconnectBtn = document.getElementById('oauthDisconnectBtn');
-
+const ytCookieFileInput = document.getElementById('ytCookieFileInput');
+const ytFileLabelText = document.getElementById('ytFileLabelText');
 const ytCookieForm = document.getElementById('ytCookieForm');
 const ytCookieInput = document.getElementById('ytCookieInput');
 const ytFeedback = document.getElementById('ytFeedback');
 const ytTestBtn = document.getElementById('ytTestBtn');
 const ytDeleteBtn = document.getElementById('ytDeleteBtn');
-
-let ytPollTimer = null;
 
 function showYtFeedback(msg, isSuccess = false) {
   ytFeedback.textContent = msg;
@@ -517,45 +509,17 @@ async function fetchYtStatus() {
     const res = await apiFetch('/api/youtube/status');
     const data = await res.json();
 
-    // 1. Google OAuth Status
-    if (data.oauth && data.oauth.connected) {
-      oauthIdleBox.classList.add('hidden');
-      oauthPendingBox.classList.add('hidden');
-      oauthConnectedBox.classList.remove('hidden');
+    if (data.hasCookies && data.cookiesInfo) {
       ytStatusBox.classList.add('active');
-      ytStatusText.textContent = '✔ Google-Konto verbunden (OAuth2 aktiv)';
-      if (ytPollTimer) clearTimeout(ytPollTimer);
-    } else if (data.oauth && data.oauth.pending) {
-      oauthIdleBox.classList.add('hidden');
-      oauthPendingBox.classList.remove('hidden');
-      oauthConnectedBox.classList.add('hidden');
-      if (data.oauth.url) oauthUrlLink.href = data.oauth.url;
-      if (data.oauth.code) oauthCodeDisplay.textContent = data.oauth.code;
-      ytStatusBox.classList.remove('active');
-      ytStatusText.textContent = '⏳ Warte auf Google-Bestätigung...';
-
-      // Automatisch alle 3 Sekunden nachprüfen
-      if (ytPollTimer) clearTimeout(ytPollTimer);
-      ytPollTimer = setTimeout(fetchYtStatus, 3000);
+      ytStatusText.textContent = `✔ Cookies aktiv (${data.cookiesInfo.lines} Zeilen, ${Math.round(data.cookiesInfo.size / 1024)} KB)`;
+      if (ytDeleteBtn) ytDeleteBtn.classList.remove('hidden');
     } else {
-      oauthIdleBox.classList.remove('hidden');
-      oauthPendingBox.classList.add('hidden');
-      oauthConnectedBox.classList.add('hidden');
-      if (ytPollTimer) clearTimeout(ytPollTimer);
-
-      // 2. Cookie Status als Fallback
-      if (data.hasCookies && data.cookiesInfo) {
-        ytStatusBox.classList.add('active');
-        ytStatusText.textContent = `✔ Cookies aktiv (${data.cookiesInfo.lines} Einträge, ${Math.round(data.cookiesInfo.size / 1024)} KB)`;
-        ytDeleteBtn.classList.remove('hidden');
-      } else {
-        ytStatusBox.classList.remove('active');
-        ytStatusText.textContent = 'Nicht angemeldet (Bot-Schutz kann Downloads sperren)';
-        ytDeleteBtn.classList.add('hidden');
-      }
+      ytStatusBox.classList.remove('active');
+      ytStatusText.textContent = 'Keine Cookies hinterlegt (Bot-Schutz sperrt Downloads)';
+      if (ytDeleteBtn) ytDeleteBtn.classList.add('hidden');
     }
   } catch (err) {
-    ytStatusText.textContent = 'Fehler beim Abfragen des Status';
+    ytStatusText.textContent = 'Fehler beim Abfragen des Cookie-Status';
   }
 }
 
@@ -570,57 +534,25 @@ if (ytSettingsBtn) {
 if (ytCloseBtn) {
   ytCloseBtn.addEventListener('click', () => {
     ytModal.classList.add('hidden');
-    if (ytPollTimer) clearTimeout(ytPollTimer);
   });
 }
 
-// Google OAuth Start Button
-if (oauthStartBtn) {
-  oauthStartBtn.addEventListener('click', async () => {
-    oauthStartBtn.disabled = true;
-    oauthStartBtn.innerHTML = '<span>Fordere Code an...</span>';
-    showYtFeedback('Starte Google Device-Anmeldung...', true);
+// Datei-Upload für cookies.txt
+if (ytCookieFileInput) {
+  ytCookieFileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (ytFileLabelText) ytFileLabelText.textContent = `📁 ${file.name}`;
 
-    try {
-      const res = await apiFetch('/api/youtube/oauth/start', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Fehler beim Anfordern des Codes');
-
-      oauthIdleBox.classList.add('hidden');
-      oauthPendingBox.classList.remove('hidden');
-      if (data.url) oauthUrlLink.href = data.url;
-      if (data.code) oauthCodeDisplay.textContent = data.code;
-      showYtFeedback('Code erhalten! Bitte jetzt bei Google eingeben.', true);
-
-      if (ytPollTimer) clearTimeout(ytPollTimer);
-      ytPollTimer = setTimeout(fetchYtStatus, 3000);
-    } catch (err) {
-      showYtFeedback(err.message, false);
-      oauthIdleBox.classList.remove('hidden');
-      oauthPendingBox.classList.add('hidden');
-    } finally {
-      oauthStartBtn.disabled = false;
-      oauthStartBtn.innerHTML = `
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-          <path d="M12.545,10.239v3.821h5.445c-0.712,2.315-2.647,3.972-5.445,3.972c-3.332,0-6.033-2.701-6.033-6.032s2.701-6.032,6.033-6.032c1.498,0,2.866,0.549,3.921,1.453l2.814-2.814C17.503,2.988,15.139,2,12.545,2C7.021,2,2.543,6.477,2.543,12s4.478,10,10.002,10c8.396,0,10.249-7.85,9.426-11.748L12.545,10.239z"/>
-        </svg>
-        <span>Google Device-Code anfordern</span>
-      `;
-    }
-  });
-}
-
-// Google OAuth Disconnect
-if (oauthDisconnectBtn) {
-  oauthDisconnectBtn.addEventListener('click', async () => {
-    if (!confirm('Möchtest du das verbundene Google-Konto trennen?')) return;
-    try {
-      await apiFetch('/api/youtube/oauth/disconnect', { method: 'POST' });
-      showYtFeedback('Google-Verbindung getrennt.', true);
-      fetchYtStatus();
-    } catch (err) {
-      showYtFeedback(err.message, false);
-    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      ytCookieInput.value = event.target.result || '';
+      showYtFeedback(`Datei "${file.name}" eingelesen (${Math.round(file.size / 1024)} KB). Klicke jetzt auf "Cookies speichern".`, true);
+    };
+    reader.onerror = () => {
+      showYtFeedback('Fehler beim Lesen der Cookie-Datei.', false);
+    };
+    reader.readAsText(file);
   });
 }
 
@@ -630,7 +562,7 @@ if (ytCookieForm) {
     e.preventDefault();
     const cookies = ytCookieInput.value.trim();
     if (!cookies) {
-      showYtFeedback('Bitte füge den Inhalt deiner cookies.txt ein.', false);
+      showYtFeedback('Bitte wähle eine Datei aus oder füge den Inhalt deiner cookies.txt ein.', false);
       return;
     }
 
@@ -641,8 +573,10 @@ if (ytCookieForm) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Fehler beim Speichern');
-      showYtFeedback(data.message || 'Cookies gespeichert!', true);
+      showYtFeedback(data.message || 'Cookies erfolgreich gespeichert!', true);
       ytCookieInput.value = '';
+      if (ytCookieFileInput) ytCookieFileInput.value = '';
+      if (ytFileLabelText) ytFileLabelText.textContent = '📁 cookies.txt Datei auswählen';
       fetchYtStatus();
     } catch (err) {
       showYtFeedback(err.message, false);
@@ -650,7 +584,7 @@ if (ytCookieForm) {
   });
 }
 
-// Verbindungstest (prüft direkt einen Stream)
+// Verbindungstest (prüft echten Stream)
 if (ytTestBtn) {
   ytTestBtn.addEventListener('click', async () => {
     ytTestBtn.disabled = true;
@@ -679,6 +613,9 @@ if (ytDeleteBtn) {
       const res = await apiFetch('/api/youtube/cookies', { method: 'DELETE' });
       const data = await res.json();
       showYtFeedback(data.message, true);
+      ytCookieInput.value = '';
+      if (ytCookieFileInput) ytCookieFileInput.value = '';
+      if (ytFileLabelText) ytFileLabelText.textContent = '📁 cookies.txt Datei auswählen';
       fetchYtStatus();
     } catch (err) {
       showYtFeedback(err.message, false);
