@@ -110,6 +110,7 @@ export class AudioPlayer {
     this.isPaused = false;
     this.positionSec = startSec;
     this.playStartTime = Date.now();
+    this.lastPlaybackError = null;
     this.onStateChange?.();
 
     console.log(`[Player] Starte Wiedergabe: ${track.title}${startSec > 0 ? ` ab ${startSec}s` : ''} (Filter: ${this.activeFilter})`);
@@ -270,6 +271,9 @@ export class AudioPlayer {
         pcm.end();
       });
 
+      let totalBytesReceived = 0;
+      let lastYtErrorDetails = '';
+
       let ffStderr = '';
       ff.stderr?.on('data', (chunk) => {
         ffStderr += chunk.toString();
@@ -278,7 +282,13 @@ export class AudioPlayer {
         if (code !== 0 && code !== null) {
           const errMsg = ffStderr.trim() || `FFmpeg beendet mit Code ${code}`;
           console.error(`[Player] ffmpeg beendet mit Code ${code}:`, errMsg);
-          this.lastPlaybackError = errMsg;
+
+          // Wenn yt-dlp 0 Bytes geliefert hat, ist FFmpeg's "Invalid data found" nur ein Folgesymptom
+          if (totalBytesReceived === 0) {
+            this.lastPlaybackError = lastYtErrorDetails || 'YouTube hat keine Audiodaten geliefert (Möglicherweise Bot-Prüfung oder Cookies erforderlich).';
+          } else if (!this.lastPlaybackError) {
+            this.lastPlaybackError = errMsg;
+          }
         }
       });
 
@@ -289,7 +299,7 @@ export class AudioPlayer {
         const ytArgs = [
           '--no-playlist',
           '--no-warnings',
-          '-f', 'bestaudio/best',
+          '-f', 'ba/b/bestaudio/best',
           ...getYtdlpAuthArgs(this.dataDir, withCookies),
           '-o', '-',
           '--',
@@ -300,7 +310,10 @@ export class AudioPlayer {
         this.currentProcessYt = yt;
 
         let bytesReceived = 0;
-        yt.stdout.on('data', (chunk: Buffer) => { bytesReceived += chunk.length; });
+        yt.stdout.on('data', (chunk: Buffer) => {
+          bytesReceived += chunk.length;
+          totalBytesReceived += chunk.length;
+        });
         yt.stdout.pipe(ff.stdin, { end: false });
         yt.stdout.on('error', () => {});
 
@@ -314,6 +327,7 @@ export class AudioPlayer {
           if (code !== 0 && code !== null) {
             const details = ytStderr.trim() || 'Keine Fehlerausgabe';
             console.error(`[Player] yt-dlp beendet mit Code ${code}${withCookies ? '' : ' (ohne Cookies)'}. Details:`, details);
+            lastYtErrorDetails = details;
             this.lastPlaybackError = details;
 
             if (withCookies && bytesReceived === 0) {
@@ -321,8 +335,6 @@ export class AudioPlayer {
               startYt(false);
               return;
             }
-          } else {
-            this.lastPlaybackError = null;
           }
           ff.stdin.end();
         });
@@ -567,6 +579,7 @@ export class AudioPlayer {
     this.isPaused = false;
     this.positionSec = 0;
     this.currentTrack = null;
+    this.lastPlaybackError = null;
     this.onStateChange?.();
   }
 

@@ -16,8 +16,8 @@ export function getYtdlpAuthArgs(dataDir: string, includeCookies: boolean = true
   args.push('--extractor-args', 'youtube:player_client=default,-tv_downgraded,-tv');
 
   // YouTube verlangt das Lösen von JS-Challenges (Signatur / n-Parameter).
-  // Node.js ist im Container vorhanden und führt den Solver lokal aus.
-  args.push('--js-runtimes', 'node');
+  // Node.js ist im Container vorhanden und führt den Solver aus.
+  args.push('--js-runtimes', 'node', '--remote-components', 'ejs:github');
 
   if (includeCookies) {
     const cookiesFile = path.join(dataDir, 'cookies.txt');

@@ -65,14 +65,36 @@ export class TeamSpeakBot {
       this.player.activeFilter = config.audio.filter;
     }
 
+    let consecutiveFailures = 0;
+    let lastFailureTime = 0;
+
     // Automatisch den nächsten Song abspielen oder Auto-DJ aktivieren
     this.player.onTrackEnd = async () => {
       const failedError = this.player.lastPlaybackError;
+      this.player.lastPlaybackError = null;
       const currentTrack = this.queue.getCurrent();
 
+      const now = Date.now();
       if (failedError) {
+        if (now - lastFailureTime < 12000) {
+          consecutiveFailures++;
+        } else {
+          consecutiveFailures = 1;
+        }
+        lastFailureTime = now;
+
         console.error(`[Bot] Fehler bei Track "${currentTrack?.title}":`, failedError);
         await this.broadcastChannel(`❌ [b]Wiedergabefehler bei "${currentTrack?.title || 'Titel'}":[/b] ${failedError.slice(0, 180)}`);
+
+        if (consecutiveFailures >= 3) {
+          console.warn('[Bot] Zu viele aufeinanderfolgende Fehler. Breche Wiedergabeschleife ab.');
+          await this.broadcastChannel('⚠️ [b]Wiedergabe angehalten:[/b] Mehrere Titel konnten nicht geladen werden. Bitte im Web-Dashboard unter Einstellungen Cookies hinterlegen oder [code]!radio 1live[/code] / [code]!local[/code] nutzen.');
+          this.queue.clear();
+          this.player.stop();
+          return;
+        }
+      } else {
+        consecutiveFailures = 0;
       }
 
       const next = this.queue.next();
@@ -85,6 +107,7 @@ export class TeamSpeakBot {
           const related = await this.resolver.getRelated(currentTrack.url);
           if (related.length > 0) {
             const autoTrack = related[0];
+            this.queue.setCurrent(autoTrack);
             this.queue.addMultiple(related.slice(1));
             await this.player.play(autoTrack);
             await this.broadcastChannel(`📻 [b]Auto-DJ[/b]: Spiele empfohlenen Track: [b]${autoTrack.title}[/b]`);

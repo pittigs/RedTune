@@ -425,12 +425,8 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
       return res.status(404).json({ error: 'Radiosender nicht gefunden' });
     }
     const track = radioStationToTrack(station, 'Web Dashboard');
-    if (!bot.player.isPlaying) {
-      bot.queue.setCurrent(track);
-      await bot.player.play(track);
-    } else {
-      bot.queue.add(track);
-    }
+    bot.queue.setCurrent(track);
+    await bot.player.play(track);
     broadcast();
     res.json({ success: true, station, track });
   });
@@ -494,12 +490,8 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
       return res.status(404).json({ error: 'Datei nicht gefunden' });
     }
     const track = bot.resolver.localFiles.entryToTrack(match, 'Web Dashboard');
-    if (!bot.player.isPlaying) {
-      bot.queue.setCurrent(track);
-      await bot.player.play(track);
-    } else {
-      bot.queue.add(track);
-    }
+    bot.queue.setCurrent(track);
+    await bot.player.play(track);
     broadcast();
     res.json({ success: true, track });
   });

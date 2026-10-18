@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod +x /usr/local/bin/yt-dlp
 
+# EJS Challenge Solver vorab herunterladen und cachen
+RUN /usr/local/bin/yt-dlp --remote-components ejs:github --js-runtimes node -f "ba/b" --skip-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" || true
+
 WORKDIR /app
 
 # Abhängigkeiten kopieren und installieren

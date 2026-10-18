@@ -459,14 +459,9 @@ export class CommandHandler {
     const track = radioStationToTrack(station, ctx.senderName);
     this.voteSkips.clear();
 
-    if (!this.player.isPlaying) {
-      this.queue.setCurrent(track);
-      await this.player.play(track);
-      await ctx.reply(`📻 Spiele jetzt live: [b]${station.name}[/b] (${station.tagline})`);
-    } else {
-      this.queue.add(track);
-      await ctx.reply(`➕ Radiosender zur Warteschlange hinzugefügt: [b]${station.name}[/b]`);
-    }
+    this.queue.setCurrent(track);
+    await this.player.play(track);
+    await ctx.reply(`📻 Spiele jetzt live: [b]${station.name}[/b] (${station.tagline})`);
   }
 
   private async cmdLocal(arg: string, ctx: CommandContext): Promise<void> {
@@ -498,14 +493,9 @@ export class CommandHandler {
     const track = localManager.entryToTrack(match, ctx.senderName);
     this.voteSkips.clear();
 
-    if (!this.player.isPlaying) {
-      this.queue.setCurrent(track);
-      await this.player.play(track);
-      await ctx.reply(`🎶 Spiele jetzt eigene Datei: [b]${match.title}[/b]`);
-    } else {
-      this.queue.add(track);
-      await ctx.reply(`➕ Eigene Datei zur Warteschlange hinzugefügt: [b]${match.title}[/b]`);
-    }
+    this.queue.setCurrent(track);
+    await this.player.play(track);
+    await ctx.reply(`🎶 Spiele jetzt eigene Datei: [b]${match.title}[/b]`);
   }
 
   private async cmdHelp(ctx: CommandContext): Promise<void> {
