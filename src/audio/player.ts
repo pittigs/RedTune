@@ -1,33 +1,30 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import fs from 'node:fs';
-import path from 'node:path';
 import OpusScript from 'opusscript';
 import { Codec } from '@honeybbq/teamspeak';
 import type { Track } from './queue.js';
 import { getYtdlpAuthArgs } from './auth-args.js';
 
 const SAMPLE_RATE = 48000;
-const CHANNELS = 2;
 const SAMPLES_PER_FRAME = 960; // 20 ms @ 48 kHz
-const FRAME_BYTES = SAMPLES_PER_FRAME * CHANNELS * 2; // 3840 Bytes
-const PREBUFFER_BYTES = FRAME_BYTES * 10; // 200 ms Prebuffer
+const FRAME_DURATION_NS = 20_000_000n; // 20 ms in nanoseconds
+const OPUS_SILENCE_PACKET = new Uint8Array([0xf8, 0xff, 0xfe]);
 
 export type VoiceSender = (packet: Uint8Array, codec: Codec) => void;
 
 export class AudioPlayer {
-  private encoder: OpusScript;
+  private encoder!: OpusScript;
   private currentProcessFf?: ChildProcess;
   private currentProcessYt?: ChildProcess;
   private pcmStream?: PassThrough;
-  private timer?: NodeJS.Timeout;
+  private timer?: NodeJS.Timeout | NodeJS.Immediate;
+  private _codec: Codec = Codec.OpusMusic;
 
   public volume: number = 50; // 0 - 100
   public isPlaying: boolean = false;
   public isPaused: boolean = false;
   public positionSec: number = 0;
   public currentTrack: Track | null = null;
-  public codec: Codec = Codec.OpusMusic;
   public lastPlaybackError: string | null = null;
 
   public onTrackEnd?: () => void;
@@ -39,8 +36,43 @@ export class AudioPlayer {
     private readonly ytdlpPath: string = 'yt-dlp',
     private readonly dataDir: string = './data'
   ) {
-    // OpusScript Encoder für 48 kHz Stereo Musik (Application AUDIO = 2049)
-    this.encoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
+    this.initEncoder();
+  }
+
+  public get codec(): Codec {
+    return this._codec;
+  }
+
+  public set codec(val: Codec) {
+    this.setCodec(val);
+  }
+
+  public setCodec(codec: Codec): void {
+    if (this._codec === codec && this.encoder) return;
+    this._codec = codec;
+    this.initEncoder();
+  }
+
+  public getChannels(): number {
+    return this._codec === Codec.OpusVoice ? 1 : 2;
+  }
+
+  private initEncoder(): void {
+    const channels = this.getChannels();
+    const app = this._codec === Codec.OpusVoice
+      ? OpusScript.Application.VOIP
+      : OpusScript.Application.AUDIO;
+
+    try {
+      this.encoder?.delete();
+    } catch {}
+
+    this.encoder = new OpusScript(SAMPLE_RATE, channels, app);
+    try {
+      this.encoder.setBitrate(this._codec === Codec.OpusVoice ? 64000 : 128000);
+      // Complexity 5 (CTL 4010): Optimaler Kompromiss aus Audioqualität und minimaler CPU-Last
+      this.encoder.encoderCTL(4010, 5);
+    } catch {}
   }
 
   async play(track: Track): Promise<void> {
@@ -54,20 +86,25 @@ export class AudioPlayer {
 
     console.log(`[Player] Starte Wiedergabe: ${track.title}`);
 
-    const pcm = new PassThrough({ highWaterMark: 1024 * 1024 });
+    // Großzügiger 2 MB Puffer für unterbrechungsfreies Streaming
+    const pcm = new PassThrough({ highWaterMark: 2 * 1024 * 1024 });
     this.pcmStream = pcm;
 
     try {
-      // 1. ffmpeg Prozess starten (liest PCM von stdin oder URL, gibt s16le 48kHz stereo auf stdout)
+      const channels = this.getChannels();
+
+      // 1. ffmpeg Prozess starten (dekodiert Audio in s16le 48kHz mono/stereo)
       const ffArgs = [
         '-hide_banner',
         '-loglevel', 'error',
         '-nostdin',
+        '-probesize', '131072',
+        '-analyzeduration', '500000',
         '-i', 'pipe:0',
         '-vn',
         '-f', 's16le',
         '-ar', String(SAMPLE_RATE),
-        '-ac', String(CHANNELS),
+        '-ac', String(channels),
         'pipe:1'
       ];
 
@@ -90,7 +127,7 @@ export class AudioPlayer {
         }
       });
 
-      // 2. yt-dlp Prozess starten (streamt den YouTube Music / YouTube Audiotrack in ffmpeg stdin)
+      // 2. yt-dlp Prozess starten
       const playUrl = track.url.replace('music.youtube.com', 'www.youtube.com');
       ff.stdin.on('error', () => {});
 
@@ -99,6 +136,7 @@ export class AudioPlayer {
           '--no-playlist',
           '--no-warnings',
           '-f', 'bestaudio/best',
+          '--buffer-size', '64K',
           '--socket-timeout', '15',
           ...getYtdlpAuthArgs(this.dataDir, withCookies),
           '-o', '-',
@@ -126,7 +164,6 @@ export class AudioPlayer {
             console.error(`[Player] yt-dlp beendet mit Code ${code}${withCookies ? '' : ' (ohne Cookies)'}. Details:`, details);
             this.lastPlaybackError = details;
 
-            // Mit Cookies fehlgeschlagen, bevor Audio kam -> einmal ohne Cookies versuchen
             if (withCookies && bytesReceived === 0) {
               console.warn('[Player] Versuche Wiedergabe erneut ohne Cookies...');
               startYt(false);
@@ -153,7 +190,7 @@ export class AudioPlayer {
         this.handleEnd();
       });
 
-      // 3. Audio-Schleife starten
+      // 3. Audio-Schleife mit Jitter-freiem Drift-Ausgleich starten
       this.startAudioLoop();
     } catch (err: any) {
       console.error('[Player] Start-Fehler:', err);
@@ -163,72 +200,114 @@ export class AudioPlayer {
   }
 
   private startAudioLoop(): void {
-    let frameCount = 0;
+    const channels = this.getChannels();
+    const frameBytes = SAMPLES_PER_FRAME * channels * 2;
+    // 1500 ms Prebuffer verhindert Buffer-Underruns durch Netzwerklatenz
+    const prebufferBytes = (SAMPLE_RATE * channels * 2 * 1500) / 1000;
+
+    let frameCount = 0n;
+    let startTime = process.hrtime.bigint();
+    let isPrebuffering = true;
 
     const tick = () => {
       if (!this.isPlaying) return;
 
       if (this.isPaused) {
-        // Pausiert: Keine Voice-Pakete senden (TeamSpeak schaltet Sprech-Indikator automatisch aus)
-        this.timer = setTimeout(tick, 50);
+        // Zeitbasis mitführen, damit positionSec während Pause nicht abweicht
+        startTime = process.hrtime.bigint() - frameCount * FRAME_DURATION_NS;
+        this.timer = setTimeout(tick, 40);
         return;
       }
 
       const pcm = this.pcmStream;
       if (!pcm) return;
 
-      // Prebuffer abwarten bevor wir anfangen
-      if (frameCount === 0 && pcm.readableLength < PREBUFFER_BYTES && !pcm.writableFinished) {
+      // 1. Initialer Prebuffer vor Start der Wiedergabe
+      if (isPrebuffering) {
+        if (pcm.readableLength < prebufferBytes && !pcm.writableFinished) {
+          this.timer = setTimeout(tick, 20);
+          return;
+        }
+        isPrebuffering = false;
+        startTime = process.hrtime.bigint() - frameCount * FRAME_DURATION_NS;
+      }
+
+      // 2. Umgang mit Buffer-Underrun / Latenzloch
+      if (pcm.readableLength < frameBytes) {
+        if (pcm.writableFinished) {
+          // Stream beendet
+          if (pcm.readableLength > 0) {
+            const rest = pcm.read(pcm.readableLength) as Buffer;
+            const frame = Buffer.alloc(frameBytes);
+            rest.copy(frame);
+            this.sendFrame(frame);
+          }
+          this.handleEnd();
+          return;
+        }
+
+        // Kein vollständiges Frame verfügbar -> Stille-Paket senden, um Jitter-Buffer-Abriss (Knistern) zu verhindern
+        try {
+          this.voiceSender(OPUS_SILENCE_PACKET, this._codec);
+        } catch {}
+
         this.timer = setTimeout(tick, 20);
         return;
       }
 
-      // 20ms Frame lesen
-      let frame: Buffer | null = null;
-      if (pcm.readableLength >= FRAME_BYTES) {
-        frame = pcm.read(FRAME_BYTES) as Buffer;
-      } else if (pcm.writableFinished) {
-        // Stream beendet
-        if (pcm.readableLength > 0) {
-          const rest = pcm.read(pcm.readableLength) as Buffer;
-          frame = Buffer.alloc(FRAME_BYTES);
-          rest.copy(frame);
-        } else {
-          this.handleEnd();
-          return;
-        }
-      }
-
-      if (frame) {
-        // Lautstärke digital skalieren (0 bis 100)
-        const volMultiplier = Math.max(0, Math.min(100, this.volume)) / 100;
-        if (volMultiplier < 1.0) {
-          for (let i = 0; i < frame.length; i += 2) {
-            const sample = frame.readInt16LE(i);
-            const scaled = Math.max(-32768, Math.min(32767, Math.round(sample * volMultiplier)));
-            frame.writeInt16LE(scaled, i);
-          }
-        }
-
-        // In Opus komprimieren und an TeamSpeak senden
-        try {
-          const opusPacket = this.encoder.encode(frame, SAMPLES_PER_FRAME);
-          this.voiceSender(opusPacket, this.codec);
-        } catch (err) {
-          console.error('[Player] Opus Encoding Fehler:', err);
-        }
-
+      // 3. 20ms Frame lesen und senden
+      const frame = pcm.read(frameBytes) as Buffer;
+      if (frame && frame.length === frameBytes) {
+        this.sendFrame(frame);
         frameCount++;
-        if (frameCount % 50 === 0) {
-          this.positionSec = Math.round(frameCount / 50);
+
+        if (frameCount % 50n === 0n) {
+          this.positionSec = Number(frameCount / 50n);
           this.onStateChange?.();
         }
       }
 
-      this.timer = setTimeout(tick, 20);
+      // 4. Drift-freier Timer mit Nanosekunden-Genauigkeit (process.hrtime.bigint)
+      const targetNs = startTime + frameCount * FRAME_DURATION_NS;
+      const nowNs = process.hrtime.bigint();
+      const diffNs = targetNs - nowNs;
+      const diffMs = Number(diffNs / 1_000_000n);
+
+      if (diffMs > 2) {
+        // Node.js setTimeout feuert minimal später, daher 1ms Vorlauf abziehen
+        this.timer = setTimeout(tick, Math.max(1, diffMs - 1));
+      } else if (diffMs >= 0) {
+        this.timer = setImmediate(tick);
+      } else {
+        // Wir liegen hinter der Zielzeit (z. B. Event-Loop-Verzögerung oder GC)
+        if (diffMs < -200) {
+          // Große Verzögerung (System-Schlafmodus etc.): Zeitbasis neu synchronisieren
+          startTime = nowNs - frameCount * FRAME_DURATION_NS;
+        }
+        // Sofort aufholen ohne Wartezeit
+        this.timer = setImmediate(tick);
+      }
     };
 
     this.timer = setTimeout(tick, 20);
+  }
+
+  private sendFrame(frame: Buffer): void {
+    // Schnelle Vektor-Lautstärkeskalierung mit Int16Array ohne Garbage-Collection-Last
+    const volMultiplier = Math.max(0, Math.min(100, this.volume)) / 100;
+    if (volMultiplier < 1.0) {
+      const samples = new Int16Array(frame.buffer, frame.byteOffset, frame.byteLength / 2);
+      for (let i = 0; i < samples.length; i++) {
+        samples[i] = (samples[i] * volMultiplier) | 0;
+      }
+    }
+
+    try {
+      const opusPacket = this.encoder.encode(frame, SAMPLES_PER_FRAME);
+      this.voiceSender(opusPacket, this._codec);
+    } catch (err) {
+      console.error('[Player] Opus Encoding Fehler:', err);
+    }
   }
 
   private handleEnd(): void {
@@ -240,6 +319,9 @@ export class AudioPlayer {
   pause(): void {
     if (this.isPlaying && !this.isPaused) {
       this.isPaused = true;
+      try {
+        this.voiceSender(OPUS_SILENCE_PACKET, this._codec);
+      } catch {}
       this.onStateChange?.();
     }
   }
@@ -253,8 +335,15 @@ export class AudioPlayer {
 
   stop(): void {
     if (this.timer) {
-      clearTimeout(this.timer);
+      clearTimeout(this.timer as NodeJS.Timeout);
+      clearImmediate(this.timer as NodeJS.Immediate);
       this.timer = undefined;
+    }
+
+    if (this.isPlaying) {
+      try {
+        this.voiceSender(OPUS_SILENCE_PACKET, this._codec);
+      } catch {}
     }
 
     if (this.currentProcessYt) {
