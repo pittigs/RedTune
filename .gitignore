@@ -6,8 +6,11 @@ dist/
 
 # Persistente Secrets & Identitäten
 data/identity.txt
+data/.cache/
+data/queue.json
 
 # Logs & Temp
 *.log
 npm-debug.log*
 .DS_Store
+

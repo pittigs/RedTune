@@ -138,10 +138,8 @@ export class AudioPlayer {
         '-hide_banner',
         '-loglevel', 'error',
         '-nostdin',
-        '-probesize', '131072',
-        '-analyzeduration', '500000',
-        ...seekArgs,
         '-i', 'pipe:0',
+        ...seekArgs,
         '-vn',
         ...filterArgs,
         '-f', 's16le',
@@ -165,7 +163,9 @@ export class AudioPlayer {
       });
       ff.on('close', (code) => {
         if (code !== 0 && code !== null) {
-          console.error(`[Player] ffmpeg beendet mit Code ${code}:`, ffStderr.trim());
+          const errMsg = ffStderr.trim() || `FFmpeg beendet mit Code ${code}`;
+          console.error(`[Player] ffmpeg beendet mit Code ${code}:`, errMsg);
+          this.lastPlaybackError = errMsg;
         }
       });
 
@@ -178,8 +178,6 @@ export class AudioPlayer {
           '--no-playlist',
           '--no-warnings',
           '-f', 'bestaudio/best',
-          '--buffer-size', '64K',
-          '--socket-timeout', '15',
           ...getYtdlpAuthArgs(this.dataDir, withCookies),
           '-o', '-',
           '--',
@@ -243,7 +241,8 @@ export class AudioPlayer {
   private startAudioLoop(initialOffsetSec: number = 0): void {
     const channels = this.getChannels();
     const frameBytes = SAMPLES_PER_FRAME * channels * 2;
-    const prebufferBytes = (SAMPLE_RATE * channels * 2 * 1500) / 1000;
+    // 400 ms Prebuffer (20 Frames = 76.800 Bytes bei Stereo) sorgt für sofortigen Start ohne Knistern
+    const prebufferBytes = frameBytes * 20;
 
     let frameCount = BigInt(Math.round(initialOffsetSec * 50));
     let startTime = process.hrtime.bigint() - frameCount * FRAME_DURATION_NS;
@@ -287,6 +286,8 @@ export class AudioPlayer {
           this.voiceSender(OPUS_SILENCE_PACKET, this._codec);
         } catch {}
 
+        // Nach Buffer-Underrun Zeitanker synchronisieren, um Paket-Stau zu verhindern
+        startTime = process.hrtime.bigint() - frameCount * FRAME_DURATION_NS;
         this.timer = setTimeout(tick, 20);
         return;
       }
@@ -325,9 +326,16 @@ export class AudioPlayer {
   private sendFrame(frame: Buffer): void {
     const volMultiplier = Math.max(0, Math.min(100, this.volume)) / 100;
     if (volMultiplier < 1.0) {
-      const samples = new Int16Array(frame.buffer, frame.byteOffset, frame.byteLength / 2);
-      for (let i = 0; i < samples.length; i++) {
-        samples[i] = (samples[i] * volMultiplier) | 0;
+      if (frame.byteOffset % 2 === 0) {
+        const samples = new Int16Array(frame.buffer, frame.byteOffset, frame.byteLength / 2);
+        for (let i = 0; i < samples.length; i++) {
+          samples[i] = (samples[i] * volMultiplier) | 0;
+        }
+      } else {
+        for (let i = 0; i < frame.length; i += 2) {
+          const sample = frame.readInt16LE(i);
+          frame.writeInt16LE((sample * volMultiplier) | 0, i);
+        }
       }
     }
 
