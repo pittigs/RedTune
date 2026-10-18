@@ -15,6 +15,11 @@ export function getYtdlpAuthArgs(dataDir: string, includeCookies: boolean = true
   // Verhindert den fehlerhaften tv_downgraded / tv Client, der "The page needs to be reloaded" auslöst
   args.push('--extractor-args', 'youtube:player_client=default,-tv_downgraded,-tv');
 
+  // YouTube verlangt das Lösen von JS-Challenges (Signatur / n-Parameter). Ohne JS-Runtime
+  // liefert yt-dlp (v.a. mit Cookies) keine Formate -> "Requested format is not available".
+  // Node.js ist im Container vorhanden; der Solver wird bei Bedarf von GitHub geladen.
+  args.push('--js-runtimes', 'node', '--remote-components', 'ejs:github');
+
   if (includeCookies) {
     const cookiesFile = path.join(dataDir, 'cookies.txt');
     if (fs.existsSync(cookiesFile)) {

@@ -332,33 +332,44 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
 
   // Echter Stream-Verbindungstest mit unzensierter Fehlerausgabe
   app.post('/api/youtube/test', async (_req: Request, res: Response) => {
-    try {
-      console.log('[Web] Starte YouTube Verbindungstest mit cookies.txt...');
+    const runTest = async (withCookies: boolean) => {
       const testArgs = [
         '--dump-single-json',
         '--no-warnings',
         '--socket-timeout', '15',
         '-f', 'ba/b',
         '--skip-download',
-        ...getYtdlpAuthArgs(bot.dataDir),
+        ...getYtdlpAuthArgs(bot.dataDir, withCookies),
         '--',
         'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
       ];
-
       const { stdout } = await execFileAsync(bot.config.audio.ytdlpPath, testArgs, { maxBuffer: 10 * 1024 * 1024 });
-      const data = JSON.parse(stdout);
-      res.json({
+      return JSON.parse(stdout);
+    };
+
+    console.log('[Web] Starte YouTube Verbindungstest...');
+    let cookieError = '';
+    try {
+      const data = await runTest(true);
+      return res.json({
         success: true,
-        message: `✔ Verbindung erfolgreich! Video autorisiert: "${data.title}"`
+        message: `✔ Verbindung erfolgreich! Audio-Format ${data.format_id} für "${data.title}" verfügbar.`
       });
     } catch (err: any) {
-      const stderr = err?.stderr || '';
-      const msg = err?.message || '';
-      console.error('[Web] YouTube Test fehlgeschlagen:', stderr || msg);
-      res.status(500).json({
-        success: false,
-        error: stderr.trim() || msg
+      cookieError = (err?.stderr || err?.message || '').trim();
+      console.warn('[Web] YouTube Test mit Cookies fehlgeschlagen:', cookieError);
+    }
+
+    try {
+      const data = await runTest(false);
+      res.json({
+        success: true,
+        message: `✔ Wiedergabe funktioniert (ohne Cookies, Format ${data.format_id}). Mit Cookies trat ein Fehler auf – ggf. cookies.txt neu exportieren: ${cookieError.slice(0, 200)}`
       });
+    } catch (err: any) {
+      const errMsg = (err?.stderr || err?.message || '').trim();
+      console.error('[Web] YouTube Test fehlgeschlagen:', errMsg);
+      res.status(500).json({ success: false, error: errMsg || cookieError });
     }
   });
 

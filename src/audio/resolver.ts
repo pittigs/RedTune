@@ -47,6 +47,7 @@ export class AudioResolver {
         '--socket-timeout', '15',
         '-f', 'ba/b',
         '--skip-download',
+        '--ignore-no-formats-error',
         ...getYtdlpAuthArgs(this.dataDir, withCookies),
         '--',
         target
@@ -77,8 +78,9 @@ export class AudioResolver {
       const msg = err?.message || '';
 
       // Falls YouTube mit Cookies "The page needs to be reloaded" meldet, ohne Cookies versuchen
-      if (stderr.includes('The page needs to be reloaded') || msg.includes('The page needs to be reloaded')) {
-        console.warn('[Resolver] "The page needs to be reloaded" erhalten. Versuche Fallback ohne Cookies...');
+      const combined = `${stderr}\n${msg}`;
+      if (combined.includes('The page needs to be reloaded') || combined.includes('Requested format is not available')) {
+        console.warn('[Resolver] YouTube-Fehler mit Cookies. Versuche Fallback ohne Cookies...');
         try {
           return await runYtdlp(false);
         } catch (fallbackErr: any) {

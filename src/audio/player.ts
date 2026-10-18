@@ -92,42 +92,60 @@ export class AudioPlayer {
 
       // 2. yt-dlp Prozess starten (streamt den YouTube Music / YouTube Audiotrack in ffmpeg stdin)
       const playUrl = track.url.replace('music.youtube.com', 'www.youtube.com');
-      const ytArgs = [
-        '--no-playlist',
-        '--no-warnings',
-        '-f', 'bestaudio/best',
-        '--socket-timeout', '15',
-        ...getYtdlpAuthArgs(this.dataDir),
-        '-o', '-',
-        '--',
-        playUrl
-      ];
-
-      const yt = spawn(this.ytdlpPath, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-      this.currentProcessYt = yt;
-
-      yt.stdout.pipe(ff.stdin);
-      yt.stdout.on('error', () => {});
       ff.stdin.on('error', () => {});
 
-      let ytStderr = '';
-      yt.stderr?.on('data', (chunk) => {
-        ytStderr += chunk.toString();
-      });
+      const startYt = (withCookies: boolean) => {
+        const ytArgs = [
+          '--no-playlist',
+          '--no-warnings',
+          '-f', 'bestaudio/best',
+          '--socket-timeout', '15',
+          ...getYtdlpAuthArgs(this.dataDir, withCookies),
+          '-o', '-',
+          '--',
+          playUrl
+        ];
 
-      yt.on('close', (code) => {
-        if (code !== 0 && code !== null) {
-          const details = ytStderr.trim() || 'Keine Fehlerausgabe';
-          console.error(`[Player] yt-dlp beendet mit Code ${code}. Details:`, details);
-          this.lastPlaybackError = details;
-        }
-      });
+        const yt = spawn(this.ytdlpPath, ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+        this.currentProcessYt = yt;
 
-      yt.on('error', (err) => {
-        console.error('[Player] yt-dlp Prozessfehler:', err.message);
-        this.lastPlaybackError = err.message;
-        this.handleEnd();
-      });
+        let bytesReceived = 0;
+        yt.stdout.on('data', (chunk: Buffer) => { bytesReceived += chunk.length; });
+        yt.stdout.pipe(ff.stdin, { end: false });
+        yt.stdout.on('error', () => {});
+
+        let ytStderr = '';
+        yt.stderr?.on('data', (chunk) => {
+          ytStderr += chunk.toString();
+        });
+
+        yt.on('close', (code) => {
+          if (this.currentProcessYt !== yt) return; // gestoppt oder ersetzt
+          if (code !== 0 && code !== null) {
+            const details = ytStderr.trim() || 'Keine Fehlerausgabe';
+            console.error(`[Player] yt-dlp beendet mit Code ${code}${withCookies ? '' : ' (ohne Cookies)'}. Details:`, details);
+            this.lastPlaybackError = details;
+
+            // Mit Cookies fehlgeschlagen, bevor Audio kam -> einmal ohne Cookies versuchen
+            if (withCookies && bytesReceived === 0) {
+              console.warn('[Player] Versuche Wiedergabe erneut ohne Cookies...');
+              startYt(false);
+              return;
+            }
+          } else {
+            this.lastPlaybackError = null;
+          }
+          ff.stdin.end();
+        });
+
+        yt.on('error', (err) => {
+          console.error('[Player] yt-dlp Prozessfehler:', err.message);
+          this.lastPlaybackError = err.message;
+          this.handleEnd();
+        });
+      };
+
+      startYt(true);
 
       ff.on('error', (err) => {
         console.error('[Player] ffmpeg Prozessfehler:', err.message);
