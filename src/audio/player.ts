@@ -27,6 +27,8 @@ export class AudioPlayer {
   public isPaused: boolean = false;
   public positionSec: number = 0;
   public currentTrack: Track | null = null;
+  public codec: Codec = Codec.OpusMusic;
+  public lastPlaybackError: string | null = null;
 
   public onTrackEnd?: () => void;
   public onStateChange?: () => void;
@@ -115,24 +117,29 @@ export class AudioPlayer {
 
       yt.on('close', (code) => {
         if (code !== 0 && code !== null) {
-          console.error(`[Player] yt-dlp beendet mit Code ${code}. Details:`, ytStderr.trim() || 'Keine Fehlerausgabe');
+          const details = ytStderr.trim() || 'Keine Fehlerausgabe';
+          console.error(`[Player] yt-dlp beendet mit Code ${code}. Details:`, details);
+          this.lastPlaybackError = details;
         }
       });
 
       yt.on('error', (err) => {
         console.error('[Player] yt-dlp Prozessfehler:', err.message);
+        this.lastPlaybackError = err.message;
         this.handleEnd();
       });
 
       ff.on('error', (err) => {
         console.error('[Player] ffmpeg Prozessfehler:', err.message);
+        this.lastPlaybackError = err.message;
         this.handleEnd();
       });
 
       // 3. Audio-Schleife starten
       this.startAudioLoop();
-    } catch (err) {
+    } catch (err: any) {
       console.error('[Player] Start-Fehler:', err);
+      this.lastPlaybackError = err?.message || String(err);
       this.handleEnd();
     }
   }
@@ -144,8 +151,7 @@ export class AudioPlayer {
       if (!this.isPlaying) return;
 
       if (this.isPaused) {
-        // Stille senden und Sprech-Indikator deaktivieren
-        this.voiceSender(new Uint8Array(0), Codec.OpusMusic);
+        // Pausiert: Keine Voice-Pakete senden (TeamSpeak schaltet Sprech-Indikator automatisch aus)
         this.timer = setTimeout(tick, 50);
         return;
       }
@@ -189,7 +195,7 @@ export class AudioPlayer {
         // In Opus komprimieren und an TeamSpeak senden
         try {
           const opusPacket = this.encoder.encode(frame, SAMPLES_PER_FRAME);
-          this.voiceSender(opusPacket, Codec.OpusMusic);
+          this.voiceSender(opusPacket, this.codec);
         } catch (err) {
           console.error('[Player] Opus Encoding Fehler:', err);
         }
@@ -216,7 +222,6 @@ export class AudioPlayer {
   pause(): void {
     if (this.isPlaying && !this.isPaused) {
       this.isPaused = true;
-      this.voiceSender(new Uint8Array(0), Codec.OpusMusic);
       this.onStateChange?.();
     }
   }
@@ -248,9 +253,6 @@ export class AudioPlayer {
       this.pcmStream.destroy();
       this.pcmStream = undefined;
     }
-
-    // Sprech-Status beenden
-    this.voiceSender(new Uint8Array(0), Codec.OpusMusic);
 
     this.isPlaying = false;
     this.isPaused = false;

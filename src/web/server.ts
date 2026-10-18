@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import type { TeamSpeakBot } from '../bot/client.js';
 import { UserManager } from '../auth/users.js';
 import { getYtdlpAuthArgs } from '../audio/auth-args.js';
+import { saveConfig } from '../config.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -359,6 +360,61 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
         error: stderr.trim() || msg
       });
     }
+  });
+
+  // TeamSpeak Server-Konfiguration abrufen
+  app.get('/api/teamspeak/config', (_req: Request, res: Response) => {
+    res.json({
+      address: bot.config.server.address,
+      nickname: bot.config.server.nickname,
+      channel: bot.config.server.channel || '',
+      hasPassword: Boolean(bot.config.server.password),
+      hasChannelPassword: Boolean(bot.config.server.channelPassword),
+      status: bot.getStatus()
+    });
+  });
+
+  // TeamSpeak Server-Konfiguration aktualisieren & Reconnect auslösen
+  app.post('/api/teamspeak/config', async (req: Request, res: Response) => {
+    const { address, password, nickname, channel, channelPassword } = req.body;
+    if (!address || typeof address !== 'string' || !address.trim()) {
+      return res.status(400).json({ error: 'Bitte eine gültige Server-Adresse angeben.' });
+    }
+
+    bot.config.server.address = address.trim();
+    if (typeof password === 'string') {
+      bot.config.server.password = password;
+    }
+    if (nickname && typeof nickname === 'string' && nickname.trim()) {
+      bot.config.server.nickname = nickname.trim();
+    }
+    if (typeof channel === 'string') {
+      bot.config.server.channel = channel.trim();
+    }
+    if (typeof channelPassword === 'string') {
+      bot.config.server.channelPassword = channelPassword;
+    }
+
+    // In config.json speichern
+    const configPath = path.join(bot.dataDir, 'config.json');
+    saveConfig(configPath, bot.config);
+    console.log('[Web] TeamSpeak Konfiguration aktualisiert und in config.json gespeichert.');
+
+    // Sofortigen Reconnect im Hintergrund ausführen
+    bot.reconnect().catch((err) => {
+      console.error('[Web] Reconnect-Fehler nach Konfigurationsänderung:', err.message);
+    });
+
+    broadcast();
+    res.json({ 
+      success: true, 
+      message: 'TeamSpeak Konfiguration gespeichert. Neuer Verbindungsversuch gestartet!',
+      config: {
+        address: bot.config.server.address,
+        nickname: bot.config.server.nickname,
+        channel: bot.config.server.channel,
+      }
+    });
   });
 
   server.listen(port, () => {

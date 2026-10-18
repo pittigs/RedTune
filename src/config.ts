@@ -71,8 +71,11 @@ export function loadConfig(configPath: string): BotConfig {
     fs.writeFileSync(resolved, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
   }
 
-  // Umgebungsvariablen für Docker / docker-compose.yml
-  if (process.env.TEAMSPEAK_ADDR) cfg.server.address = process.env.TEAMSPEAK_ADDR;
+  // Umgebungsvariablen für Docker / docker-compose.yml (nur wenn keine Dummy-Platzhalter)
+  const envAddr = process.env.TEAMSPEAK_ADDR?.trim();
+  if (envAddr && envAddr !== 'ts.deinedomain.de:9987' && envAddr !== 'DEINE_SERVER_IP_ODER_DOMAIN') {
+    cfg.server.address = envAddr;
+  }
   if (process.env.TEAMSPEAK_PASSWORD) cfg.server.password = process.env.TEAMSPEAK_PASSWORD;
   if (process.env.TEAMSPEAK_NICKNAME) cfg.server.nickname = process.env.TEAMSPEAK_NICKNAME;
   if (process.env.TEAMSPEAK_CHANNEL) cfg.server.channel = process.env.TEAMSPEAK_CHANNEL;
@@ -80,4 +83,10 @@ export function loadConfig(configPath: string): BotConfig {
   if (process.env.WEB_PASSWORD) cfg.web.password = process.env.WEB_PASSWORD;
 
   return cfg;
+}
+
+export function saveConfig(configPath: string, cfg: BotConfig): void {
+  const resolved = path.resolve(configPath);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  fs.writeFileSync(resolved, JSON.stringify(cfg, null, 2), 'utf-8');
 }

@@ -1,7 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Client, generateIdentitySync, parseIdentity, type Identity } from '@honeybbq/teamspeak/client';
-import { escape, Codec, ClientStatus, listChannels, moveClient } from '@honeybbq/teamspeak';
+import { Client, generateIdentitySync, parseIdentity, type Identity, type ClientOptions } from '@honeybbq/teamspeak/client';
+import { 
+  Codec, 
+  ClientStatus, 
+  listChannels, 
+  listClients, 
+  moveClient, 
+  sendChannelMessage, 
+  sendPrivateMessage, 
+  sendServerMessage 
+} from '@honeybbq/teamspeak';
 import type { BotConfig } from '../config.js';
 import { AudioPlayer } from '../audio/player.js';
 import { MusicQueue } from '../audio/queue.js';
@@ -17,6 +26,10 @@ export class TeamSpeakBot {
   public commandHandler!: CommandHandler;
   public onStatusChange?: () => void;
 
+  public lastConnectionError: string | null = null;
+  public isConnecting: boolean = false;
+  public currentChannelName: string = '';
+
   constructor(
     public readonly config: BotConfig,
     public readonly dataDir: string = './data'
@@ -27,11 +40,12 @@ export class TeamSpeakBot {
     // Initialisiert den AudioPlayer mit unserem voiceSender Hook
     this.player = new AudioPlayer(
       (packet: Uint8Array, codec: Codec) => {
+        if (!packet || packet.length === 0) return;
         if (this.client?.status === ClientStatus.Connected) {
           try {
             this.client.sendVoice(packet, codec);
           } catch (err) {
-            // Voice Buffer Fehler abfangen
+            console.error('[Bot] sendVoice Fehler:', err);
           }
         }
       },
@@ -63,39 +77,67 @@ export class TeamSpeakBot {
   }
 
   async start(): Promise<void> {
+    if (this.client) {
+      try {
+        await this.client.disconnect();
+      } catch {}
+      this.client = undefined;
+    }
+
     this.identity = this.loadOrGenerateIdentity();
     console.log(`[Bot] TeamSpeak Identity geladen. UID: ${this.identity.uid("sha1")}`);
 
     const serverAddr = this.config.server.address;
-    const nickname = this.config.server.nickname || 'YT Music Bot';
+    const nickname = this.config.server.nickname || 'RedTune';
 
     console.log(`[Bot] Verbinde zu TeamSpeak Server: ${serverAddr}...`);
+    this.isConnecting = true;
+    this.lastConnectionError = null;
+    this.onStatusChange?.();
 
-    this.client = new Client(this.identity, serverAddr, nickname, {
+    const clientOptions: ClientOptions = {
+      serverPassword: this.config.server.password || undefined,
+      defaultChannel: this.config.server.channel || undefined,
+      defaultChannelPassword: this.config.server.channelPassword || undefined,
       logger: {
-        debug: () => {},
+        debug: (msg, ...args) => console.log('[TS-Debug]', msg, ...args),
         info: (msg, ...args) => console.log('[TS-Info]', msg, ...args),
         warn: (msg, ...args) => console.warn('[TS-Warn]', msg, ...args),
         error: (msg, ...args) => console.error('[TS-Error]', msg, ...args),
       }
-    });
+    };
 
+    this.client = new Client(this.identity, serverAddr, nickname, clientOptions);
     this.setupEvents();
 
     try {
       await this.client.connect({ signal: AbortSignal.timeout(25_000) });
+      this.isConnecting = false;
+      this.lastConnectionError = null;
       console.log(`[Bot] ✔ Erfolgreich mit TeamSpeak verbunden! Client-ID: ${this.client.clientID}`);
+      this.onStatusChange?.();
 
-      // Channel beitreten falls konfiguriert (mit 1.5s Verzögerung für Server-Sync)
-      if (this.config.server.channel) {
-        setTimeout(async () => {
-          await this.joinChannel(this.config.server.channel!, this.config.server.channelPassword);
-        }, 1500);
-      }
-    } catch (err) {
-      console.error('[Bot] Verbindungsfehler:', (err as Error).message);
+      // Channel synchronisieren und beitreten
+      setTimeout(async () => {
+        if (this.config.server.channel) {
+          await this.joinChannel(this.config.server.channel, this.config.server.channelPassword);
+        } else {
+          await this.syncCurrentChannelInfo();
+        }
+      }, 1500);
+    } catch (err: any) {
+      this.isConnecting = false;
+      this.lastConnectionError = err?.message || String(err);
+      console.error('[Bot] Verbindungsfehler:', this.lastConnectionError);
+      this.onStatusChange?.();
       throw err;
     }
+  }
+
+  public async reconnect(): Promise<void> {
+    console.log('[Bot] Starte Reconnect...');
+    this.player.stop();
+    await this.start();
   }
 
   private setupEvents(): void {
@@ -103,11 +145,15 @@ export class TeamSpeakBot {
 
     this.client.on('connected', () => {
       console.log('[Bot] Status: Online');
+      this.isConnecting = false;
+      this.lastConnectionError = null;
       this.onStatusChange?.();
     });
 
     this.client.on('disconnected', ({ error, willReconnect }) => {
       console.warn(`[Bot] Verbindung getrennt. Reconnect: ${willReconnect ? 'Ja' : 'Nein'}`, error?.message || '');
+      this.isConnecting = false;
+      this.lastConnectionError = error?.message || 'Verbindung getrennt';
       this.player.stop();
       this.onStatusChange?.();
     });
@@ -120,13 +166,14 @@ export class TeamSpeakBot {
       console.log(`[Chat] [${msg.invokerName}]: ${msg.message}`);
 
       const reply = async (text: string) => {
-        if (!this.client) return;
+        if (!this.client || this.client.status !== ClientStatus.Connected) return;
         try {
           if (msg.targetMode === 1 /* Private */) {
-            await this.client.exec(`sendtextmessage targetmode=1 target=${msg.invokerID} msg=${escape(text)}`);
+            await sendPrivateMessage(this.client, msg.invokerID, text);
+          } else if (msg.targetMode === 3 /* Server */) {
+            await sendServerMessage(this.client, text);
           } else {
-            // Channel Message
-            await this.client.exec(`sendtextmessage targetmode=2 msg=${escape(text)}`);
+            await sendChannelMessage(this.client, text);
           }
         } catch (err) {
           console.error('[Bot] Fehler beim Senden der Chat-Antwort:', err);
@@ -145,10 +192,34 @@ export class TeamSpeakBot {
   public async broadcastChannel(text: string): Promise<void> {
     if (this.client?.status === ClientStatus.Connected) {
       try {
-        await this.client.exec(`sendtextmessage targetmode=2 msg=${escape(text)}`);
+        await sendChannelMessage(this.client, text);
       } catch (err) {
         // Ignorieren falls keine Channel-Schreibrechte
       }
+    }
+  }
+
+  public async syncCurrentChannelInfo(): Promise<void> {
+    if (!this.client || this.client.status !== ClientStatus.Connected) return;
+    try {
+      const [channels, clients] = await Promise.all([
+        listChannels(this.client, { timeoutMs: 10_000 }),
+        listClients(this.client, { timeoutMs: 10_000 })
+      ]);
+      const selfClient = clients.find(c => c.id === this.client?.clientID);
+      if (selfClient) {
+        const ch = channels.find(c => c.id === selfClient.channelID);
+        if (ch) {
+          this.currentChannelName = ch.name;
+          if (ch.codec !== undefined) {
+            this.player.codec = ch.codec as Codec;
+            console.log(`[Bot] Aktueller Channel: "${ch.name}" (Codec: ${ch.codec === Codec.OpusVoice ? 'Opus Voice' : 'Opus Music'})`);
+          }
+          this.onStatusChange?.();
+        }
+      }
+    } catch (e) {
+      // Ignorieren falls Berechtigungen eingeschränkt sind
     }
   }
 
@@ -183,7 +254,13 @@ export class TeamSpeakBot {
           password: password || undefined,
           timeoutMs: 10_000,
         });
+        this.currentChannelName = targetCh.name;
+        if (targetCh.codec !== undefined) {
+          this.player.codec = targetCh.codec as Codec;
+          console.log(`[Bot] Verwende Channel-Codec: ${targetCh.codec === Codec.OpusVoice ? 'Opus Voice' : 'Opus Music'}`);
+        }
         console.log(`[Bot] ✔ Erfolgreich in Channel "${targetCh.name}" gewechselt.`);
+        this.onStatusChange?.();
         return true;
       } else {
         console.warn(`[Bot] ❌ Channel "${channelTarget}" nicht gefunden.`);
@@ -218,6 +295,9 @@ export class TeamSpeakBot {
   public getStatus() {
     return {
       connected: this.client?.status === ClientStatus.Connected,
+      isConnecting: this.isConnecting,
+      lastError: this.lastConnectionError,
+      currentChannel: this.currentChannelName,
       botName: this.config.server.nickname,
       server: this.config.server.address,
       uid: this.identity?.uid("sha1"),
@@ -226,7 +306,8 @@ export class TeamSpeakBot {
         isPaused: this.player.isPaused,
         volume: this.player.volume,
         positionSec: this.player.positionSec,
-        currentTrack: this.player.currentTrack
+        currentTrack: this.player.currentTrack,
+        lastError: this.player.lastPlaybackError
       },
       queue: {
         items: this.queue.getItems(),

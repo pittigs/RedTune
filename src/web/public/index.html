@@ -82,70 +82,130 @@
     </div>
   </div>
 
-  <!-- YouTube & Bot-Schutz Modal -->
+  <!-- Settings Modal (TeamSpeak & YouTube) -->
   <div id="ytModal" class="login-overlay hidden">
     <div class="login-card yt-modal-card">
-      <div class="login-icon yt-icon">
-        <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor">
-          <path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/>
-        </svg>
-      </div>
-      <h2>YouTube & Bot-Schutz</h2>
-      <p>YouTube verlangt auf Servern eine Anmeldung ("Sign in to confirm you're not a bot"). Mit deinen YouTube-Cookies wird der Bot sofort freigeschaltet.</p>
-
-      <div class="yt-status-box" id="ytStatusBox">
-        <span class="status-dot"></span>
-        <span id="ytStatusText">Lade Cookie-Status...</span>
-      </div>
-
-      <div class="yt-instructions">
-        <strong>In 3 Schritten einrichten:</strong>
-        <ol>
-          <li>Im Browser auf <a href="https://music.youtube.com" target="_blank" rel="noopener">music.youtube.com</a> oder <a href="https://youtube.com" target="_blank" rel="noopener">youtube.com</a> anmelden.</li>
-          <li>Erweiterung <em>"Get cookies.txt LOCALLY"</em> öffnen & auf <strong>Export</strong> klicken (lädt <code>cookies.txt</code> herunter).</li>
-          <li>Die Datei unten auswählen oder den Text einfügen und speichern.</li>
-        </ol>
+      <div class="modal-tabs">
+        <button type="button" id="tabTsBtn" class="modal-tab-btn active">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M4 1h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm0 8h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1zm0 8h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1z"/>
+          </svg>
+          <span>TeamSpeak</span>
+        </button>
+        <button type="button" id="tabYtBtn" class="modal-tab-btn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/>
+          </svg>
+          <span>YouTube Cookies</span>
+        </button>
       </div>
 
-      <form id="ytCookieForm">
-        <div class="cookie-upload-row">
-          <label for="ytCookieFileInput" class="btn-secondary cookie-file-btn">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/>
-            </svg>
-            <span id="ytFileLabelText">📁 cookies.txt Datei auswählen</span>
-          </label>
-          <input type="file" id="ytCookieFileInput" accept=".txt" class="hidden" />
+      <!-- Tab Content: TeamSpeak Server -->
+      <div id="tabTsContent">
+        <h2>TeamSpeak Server</h2>
+        <p>Verbinde den Bot mit deinem TeamSpeak 3 / 6 Server.</p>
+
+        <div class="yt-status-box" id="tsStatusBox">
+          <span class="status-dot"></span>
+          <span id="tsStatusText">Lade Status...</span>
         </div>
 
-        <div style="font-size: 0.8rem; color: var(--text-muted); margin: 8px 0 4px 0; text-align: center;">– oder Inhalt direkt einfügen –</div>
+        <form id="tsSettingsForm" class="ts-form-grid">
+          <div>
+            <label for="tsAddressInput">Server-Adresse (IP oder Domain:Port) *</label>
+            <input type="text" id="tsAddressInput" placeholder="z. B. ts.meinedomain.de:9987 oder 127.0.0.1:9987" required />
+          </div>
+          <div>
+            <label for="tsPasswordInput">Server-Passwort (leer lassen falls keines)</label>
+            <input type="password" id="tsPasswordInput" placeholder="Server-Passwort" autocomplete="off" />
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <div style="flex: 1;">
+              <label for="tsNicknameInput">Bot-Name</label>
+              <input type="text" id="tsNicknameInput" placeholder="RedTune" value="RedTune" />
+            </div>
+            <div style="flex: 1;">
+              <label for="tsChannelInput">Standard-Channel</label>
+              <input type="text" id="tsChannelInput" placeholder="z. B. Musik (optional)" />
+            </div>
+          </div>
+          <div>
+            <label for="tsChannelPasswordInput">Channel-Passwort (optional)</label>
+            <input type="password" id="tsChannelPasswordInput" placeholder="Channel-Passwort falls geschützt" autocomplete="off" />
+          </div>
 
-        <textarea 
-          id="ytCookieInput" 
-          rows="5" 
-          placeholder="# Netscape HTTP Cookie File&#10;# Hier den Inhalt der cookies.txt einfügen..."
-          spellcheck="false"
-        ></textarea>
+          <div id="tsFeedback" class="login-error hidden"></div>
 
-        <div id="ytFeedback" class="login-error hidden" style="margin-top: 10px;"></div>
+          <div class="modal-btn-row" style="margin-top: 12px;">
+            <button type="submit" id="tsSaveBtn" class="btn-primary">
+              <span>Speichern & Verbinden</span>
+            </button>
+            <button type="button" id="tsCloseBtn" class="btn-secondary">
+              <span>Schließen</span>
+            </button>
+          </div>
+        </form>
+      </div>
 
-        <div class="modal-btn-row" style="margin-top: 12px;">
-          <button type="submit" id="ytSaveBtn" class="btn-primary">
-            <span>Cookies speichern</span>
-          </button>
-          <button type="button" id="ytTestBtn" class="btn-secondary">
-            <span>Verbindung testen</span>
-          </button>
+      <!-- Tab Content: YouTube & Cookies -->
+      <div id="tabYtContent" class="hidden">
+        <h2>YouTube & Bot-Schutz</h2>
+        <p>YouTube verlangt auf Servern eine Anmeldung ("Sign in to confirm you're not a bot"). Mit deinen YouTube-Cookies wird der Bot sofort freigeschaltet.</p>
+
+        <div class="yt-status-box" id="ytStatusBox">
+          <span class="status-dot"></span>
+          <span id="ytStatusText">Lade Cookie-Status...</span>
         </div>
-        <div class="modal-btn-row" style="margin-top: 8px;">
-          <button type="button" id="ytDeleteBtn" class="btn-secondary hidden" style="color: #ff3b30;">
-            <span>Cookies löschen</span>
-          </button>
-          <button type="button" id="ytCloseBtn" class="btn-secondary">
-            <span>Schließen</span>
-          </button>
+
+        <div class="yt-instructions">
+          <strong>In 3 Schritten einrichten:</strong>
+          <ol>
+            <li>Im Browser auf <a href="https://music.youtube.com" target="_blank" rel="noopener">music.youtube.com</a> oder <a href="https://youtube.com" target="_blank" rel="noopener">youtube.com</a> anmelden.</li>
+            <li>Erweiterung <em>"Get cookies.txt LOCALLY"</em> öffnen & auf <strong>Export</strong> klicken (lädt <code>cookies.txt</code> herunter).</li>
+            <li>Die Datei unten auswählen oder den Text einfügen und speichern.</li>
+          </ol>
         </div>
-      </form>
+
+        <form id="ytCookieForm">
+          <div class="cookie-upload-row">
+            <label for="ytCookieFileInput" class="btn-secondary cookie-file-btn">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/>
+              </svg>
+              <span id="ytFileLabelText">📁 cookies.txt Datei auswählen</span>
+            </label>
+            <input type="file" id="ytCookieFileInput" accept=".txt" class="hidden" />
+          </div>
+
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin: 8px 0 4px 0; text-align: center;">– oder Inhalt direkt einfügen –</div>
+
+          <textarea 
+            id="ytCookieInput" 
+            rows="5" 
+            placeholder="# Netscape HTTP Cookie File&#10;# Hier den Inhalt der cookies.txt einfügen..."
+            spellcheck="false"
+          ></textarea>
+
+          <div id="ytFeedback" class="login-error hidden" style="margin-top: 10px;"></div>
+
+          <div class="modal-btn-row" style="margin-top: 12px;">
+            <button type="submit" id="ytSaveBtn" class="btn-primary">
+              <span>Cookies speichern</span>
+            </button>
+            <button type="button" id="ytTestBtn" class="btn-secondary">
+              <span>Verbindung testen</span>
+            </button>
+          </div>
+          <div class="modal-btn-row" style="margin-top: 8px;">
+            <button type="button" id="ytDeleteBtn" class="btn-secondary hidden" style="color: #ff3b30;">
+              <span>Cookies löschen</span>
+            </button>
+            <button type="button" id="ytCloseBtn" class="btn-secondary">
+              <span>Schließen</span>
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 

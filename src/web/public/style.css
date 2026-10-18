@@ -790,3 +790,113 @@ body {
   background: rgba(48, 209, 88, 0.1) !important;
   border-color: rgba(48, 209, 88, 0.3) !important;
 }
+
+/* Modal Tabs */
+.modal-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.modal-tab-btn {
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.modal-tab-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.modal-tab-btn.active {
+  color: #fff;
+  background: var(--primary);
+  box-shadow: 0 4px 12px var(--primary-glow);
+}
+
+.ts-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+  margin-bottom: 16px;
+}
+
+.ts-form-grid label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  display: block;
+}
+
+.ts-form-grid input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  outline: none;
+  transition: var(--transition);
+}
+
+.ts-form-grid input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+.status-badge.clickable {
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.status-badge.clickable:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.2);
+}
+
+.status-badge.connecting .status-dot {
+  background: #ffcc00;
+  box-shadow: 0 0 10px #ffcc00;
+  animation: pulse 1s infinite alternate;
+}
+
+.yt-status-box.error {
+  border-color: rgba(255, 59, 48, 0.4);
+  background: rgba(255, 59, 48, 0.08);
+  color: #ff453a;
+}
+
+.yt-status-box.error .status-dot {
+  background: #ff3b30;
+  box-shadow: 0 0 10px #ff3b30;
+}
+
+.yt-status-box.connecting {
+  border-color: rgba(255, 204, 0, 0.4);
+  background: rgba(255, 204, 0, 0.08);
+}
+
+.yt-status-box.connecting .status-dot {
+  background: #ffcc00;
+  box-shadow: 0 0 10px #ffcc00;
+  animation: pulse 1s infinite alternate;
+}

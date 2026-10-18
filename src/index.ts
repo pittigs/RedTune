@@ -22,21 +22,25 @@ async function main() {
     startWebServer(bot, config.web.port);
   }
 
-  // Mit TeamSpeak verbinden
-  try {
-    await bot.start();
-  } catch (err) {
-    console.error('[Main] Bot konnte nicht sofort verbinden. Starte Retry-Schleife...', (err as Error).message);
-    // Periodischer Reconnect alle 30s
-    setInterval(async () => {
-      try {
-        console.log('[Main] Neuer Verbindungsversuch zu TeamSpeak...');
-        await bot.start();
-      } catch (e) {
-        console.error('[Main] Reconnect fehlgeschlagen:', (e as Error).message);
+  // Mit TeamSpeak verbinden mit geordneter Reconnect-Schleife
+  const connectLoop = async () => {
+    while (true) {
+      if (!bot.getStatus().connected && !bot.isConnecting) {
+        try {
+          console.log('[Main] Verbinde zu TeamSpeak...');
+          await bot.start();
+        } catch (err) {
+          console.error('[Main] Verbindungsversuch fehlgeschlagen:', (err as Error).message);
+        }
       }
-    }, 30_000);
-  }
+      const delay = bot.getStatus().connected ? 10_000 : 15_000;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  };
+
+  connectLoop().catch((err) => {
+    console.error('[Main] Fehler in Reconnect-Schleife:', err);
+  });
 
   // Graceful Shutdown
   const shutdown = () => {

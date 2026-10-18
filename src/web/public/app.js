@@ -299,14 +299,24 @@ async function fetchStatus() {
 function renderStatus(status) {
   currentStatus = status;
 
+  connectionBadge.classList.add('clickable');
   if (status.connected) {
     connectionBadge.classList.add('connected');
+    connectionBadge.classList.remove('connecting');
     connectionText.textContent = 'Online';
-    botStatusText.textContent = `${status.botName} ist auf TeamSpeak aktiv`;
-  } else {
+    const chInfo = status.currentChannel ? ` (${status.currentChannel})` : '';
+    botStatusText.textContent = `${status.botName} ist verbunden${chInfo}`;
+  } else if (status.isConnecting) {
     connectionBadge.classList.remove('connected');
+    connectionBadge.classList.add('connecting');
+    connectionText.textContent = 'Verbinde...';
+    botStatusText.textContent = `Verbindungsversuch zu ${status.server || 'TeamSpeak'}...`;
+  } else {
+    connectionBadge.classList.remove('connected', 'connecting');
     connectionText.textContent = 'Offline';
-    botStatusText.textContent = 'Nicht mit TeamSpeak verbunden';
+    botStatusText.textContent = status.lastError 
+      ? `Fehler: ${status.lastError}` 
+      : 'Nicht verbunden (Klicken zum Einrichten)';
   }
 
   serverText.textContent = status.server || 'Server';
@@ -523,11 +533,116 @@ async function fetchYtStatus() {
   }
 }
 
-if (ytSettingsBtn) {
-  ytSettingsBtn.addEventListener('click', () => {
-    ytModal.classList.remove('hidden');
-    ytFeedback.classList.add('hidden');
+// --- Settings Modal Tabs & Controls ---
+const tabTsBtn = document.getElementById('tabTsBtn');
+const tabYtBtn = document.getElementById('tabYtBtn');
+const tabTsContent = document.getElementById('tabTsContent');
+const tabYtContent = document.getElementById('tabYtContent');
+
+const tsStatusBox = document.getElementById('tsStatusBox');
+const tsStatusText = document.getElementById('tsStatusText');
+const tsSettingsForm = document.getElementById('tsSettingsForm');
+const tsAddressInput = document.getElementById('tsAddressInput');
+const tsPasswordInput = document.getElementById('tsPasswordInput');
+const tsNicknameInput = document.getElementById('tsNicknameInput');
+const tsChannelInput = document.getElementById('tsChannelInput');
+const tsChannelPasswordInput = document.getElementById('tsChannelPasswordInput');
+const tsFeedback = document.getElementById('tsFeedback');
+const tsSaveBtn = document.getElementById('tsSaveBtn');
+const tsCloseBtn = document.getElementById('tsCloseBtn');
+
+function switchSettingsTab(tab) {
+  if (tab === 'teamspeak') {
+    if (tabTsBtn) tabTsBtn.classList.add('active');
+    if (tabYtBtn) tabYtBtn.classList.remove('active');
+    if (tabTsContent) tabTsContent.classList.remove('hidden');
+    if (tabYtContent) tabYtContent.classList.add('hidden');
+    fetchTsConfig();
+  } else {
+    if (tabYtBtn) tabYtBtn.classList.add('active');
+    if (tabTsBtn) tabTsBtn.classList.remove('active');
+    if (tabYtContent) tabYtContent.classList.remove('hidden');
+    if (tabTsContent) tabTsContent.classList.add('hidden');
     fetchYtStatus();
+  }
+}
+
+function openSettingsModal(tab = 'teamspeak') {
+  if (!ytModal) return;
+  ytModal.classList.remove('hidden');
+  if (ytFeedback) ytFeedback.classList.add('hidden');
+  if (tsFeedback) tsFeedback.classList.add('hidden');
+  switchSettingsTab(tab);
+}
+
+if (tabTsBtn) tabTsBtn.addEventListener('click', () => switchSettingsTab('teamspeak'));
+if (tabYtBtn) tabYtBtn.addEventListener('click', () => switchSettingsTab('youtube'));
+if (ytSettingsBtn) ytSettingsBtn.addEventListener('click', () => openSettingsModal('teamspeak'));
+if (connectionBadge) connectionBadge.addEventListener('click', () => openSettingsModal('teamspeak'));
+if (tsCloseBtn) tsCloseBtn.addEventListener('click', () => ytModal.classList.add('hidden'));
+
+async function fetchTsConfig() {
+  try {
+    const res = await apiFetch('/api/teamspeak/config');
+    const data = await res.json();
+    if (data.address && data.address !== 'DEINE_SERVER_IP_ODER_DOMAIN' && data.address !== 'ts.deinedomain.de:9987') {
+      tsAddressInput.value = data.address;
+    } else {
+      tsAddressInput.value = '';
+    }
+    tsNicknameInput.value = data.nickname || 'RedTune';
+    tsChannelInput.value = data.channel || '';
+
+    const st = data.status || currentStatus;
+    if (st && st.connected) {
+      tsStatusBox.className = 'yt-status-box active';
+      tsStatusText.textContent = `✔ Verbunden mit ${data.address}${st.currentChannel ? ` (${st.currentChannel})` : ''}`;
+    } else if (st && st.isConnecting) {
+      tsStatusBox.className = 'yt-status-box connecting';
+      tsStatusText.textContent = `⏳ Verbindungsversuch zu ${data.address || 'TeamSpeak'}...`;
+    } else {
+      tsStatusBox.className = 'yt-status-box error';
+      tsStatusText.textContent = st?.lastError 
+        ? `❌ Nicht verbunden: ${st.lastError}` 
+        : '❌ Nicht mit TeamSpeak verbunden';
+    }
+  } catch (err) {
+    console.error('Fehler beim Abrufen der TS-Konfiguration:', err);
+  }
+}
+
+if (tsSettingsForm) {
+  tsSettingsForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const address = tsAddressInput.value.trim();
+    const password = tsPasswordInput.value;
+    const nickname = tsNicknameInput.value.trim();
+    const channel = tsChannelInput.value.trim();
+    const channelPassword = tsChannelPasswordInput.value;
+
+    tsFeedback.classList.add('hidden');
+    tsSaveBtn.disabled = true;
+    tsSaveBtn.innerHTML = '<span>Speichern & Verbinden...</span>';
+
+    try {
+      const res = await apiFetch('/api/teamspeak/config', {
+        method: 'POST',
+        body: JSON.stringify({ address, password, nickname, channel, channelPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Fehler beim Speichern');
+      tsFeedback.textContent = data.message;
+      tsFeedback.className = 'login-error yt-feedback-success';
+      tsFeedback.classList.remove('hidden');
+      fetchTsConfig();
+    } catch (err) {
+      tsFeedback.textContent = err.message;
+      tsFeedback.className = 'login-error';
+      tsFeedback.classList.remove('hidden');
+    } finally {
+      tsSaveBtn.disabled = false;
+      tsSaveBtn.innerHTML = '<span>Speichern & Verbinden</span>';
+    }
   });
 }
 
