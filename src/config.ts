@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+export type AudioFilterPreset = 'normal' | 'bassboost' | 'nightcore' | 'vaporwave' | 'loudnorm';
+
 export interface BotConfig {
   server: {
     address: string;
@@ -8,11 +10,17 @@ export interface BotConfig {
     nickname: string;
     channel?: string;
     channelPassword?: string;
+    autoUpgradeCodec?: boolean; // Setzt Channel auf Opus Music (5) Quality 10
+    autoNickname?: boolean; // Bot benennt sich um: "RedTune | ▶ Titel"
+    autoPauseAlone?: boolean; // Pausiert automatisch, wenn Bot alleine im Channel ist
   };
   audio: {
     defaultVolume: number;
     ffmpegPath: string;
     ytdlpPath: string;
+    filter?: AudioFilterPreset;
+    loudnorm?: boolean; // EBU R128 Lautstärke-Normalisierung
+    enableCache?: boolean; // Songs lokal auf Festplatte cachen
   };
   web: {
     enabled: boolean;
@@ -22,6 +30,8 @@ export interface BotConfig {
   bot: {
     commandPrefix: string;
     adminUids: string[];
+    autoDj?: boolean; // Spielt automatisch ähnliche Tracks wenn Queue leerläuft
+    voteSkipThreshold?: number; // Anteil an Votes zum Überspringen (z. B. 0.5 = 50%)
   };
 }
 
@@ -31,12 +41,18 @@ const DEFAULT_CONFIG: BotConfig = {
     password: '',
     nickname: 'RedTune',
     channel: '',
-    channelPassword: ''
+    channelPassword: '',
+    autoUpgradeCodec: true,
+    autoNickname: true,
+    autoPauseAlone: true
   },
   audio: {
     defaultVolume: 50,
     ffmpegPath: 'ffmpeg',
-    ytdlpPath: 'yt-dlp'
+    ytdlpPath: 'yt-dlp',
+    filter: 'normal',
+    loudnorm: false,
+    enableCache: true
   },
   web: {
     enabled: true,
@@ -45,7 +61,9 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   bot: {
     commandPrefix: '!',
-    adminUids: []
+    adminUids: [],
+    autoDj: false,
+    voteSkipThreshold: 0.5
   }
 };
 
@@ -71,7 +89,7 @@ export function loadConfig(configPath: string): BotConfig {
     fs.writeFileSync(resolved, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
   }
 
-  // Umgebungsvariablen für Docker / docker-compose.yml (nur wenn keine Dummy-Platzhalter)
+  // Umgebungsvariablen für Docker / docker-compose.yml
   const envAddr = process.env.TEAMSPEAK_ADDR?.trim();
   if (envAddr && envAddr !== 'ts.deinedomain.de:9987' && envAddr !== 'DEINE_SERVER_IP_ODER_DOMAIN') {
     cfg.server.address = envAddr;

@@ -2,6 +2,7 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { execFile } from 'node:child_process';
@@ -9,7 +10,7 @@ import { promisify } from 'node:util';
 import type { TeamSpeakBot } from '../bot/client.js';
 import { UserManager } from '../auth/users.js';
 import { getYtdlpAuthArgs } from '../audio/auth-args.js';
-import { saveConfig } from '../config.js';
+import { saveConfig, type AudioFilterPreset } from '../config.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,17 +42,56 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     return userManager.validateSession(token);
   }
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
+
+  // Öffentliche Healthcheck & Metrik Endpunkte (Docker/Kubernetes/Prometheus)
+  app.get('/healthz', (_req: Request, res: Response) => {
+    res.json({ status: 'ok', uptime: Math.round(process.uptime()), timestamp: Date.now() });
+  });
+
+  app.get('/readyz', (_req: Request, res: Response) => {
+    const status = bot.getStatus();
+    res.json({
+      ready: true,
+      tsConnected: status.connected,
+      playerActive: status.player.isPlaying
+    });
+  });
+
+  app.get('/metrics', (_req: Request, res: Response) => {
+    const status = bot.getStatus();
+    const mem = process.memoryUsage();
+    const lines = [
+      '# HELP redtune_uptime_seconds Process uptime in seconds',
+      '# TYPE redtune_uptime_seconds counter',
+      `redtune_uptime_seconds ${Math.round(process.uptime())}`,
+      '# HELP redtune_ts_connected TeamSpeak connection state (1 = connected, 0 = disconnected)',
+      '# TYPE redtune_ts_connected gauge',
+      `redtune_ts_connected ${status.connected ? 1 : 0}`,
+      '# HELP redtune_player_playing Playback state (1 = playing, 0 = stopped)',
+      '# TYPE redtune_player_playing gauge',
+      `redtune_player_playing ${status.player.isPlaying ? 1 : 0}`,
+      '# HELP redtune_queue_length Number of tracks in queue',
+      '# TYPE redtune_queue_length gauge',
+      `redtune_queue_length ${status.queue.items.length}`,
+      '# HELP redtune_packets_sent_total Total audio packets sent',
+      '# TYPE redtune_packets_sent_total counter',
+      `redtune_packets_sent_total ${status.player.packetsSent}`,
+      '# HELP redtune_memory_rss_bytes Memory RSS in bytes',
+      '# TYPE redtune_memory_rss_bytes gauge',
+      `redtune_memory_rss_bytes ${mem.rss}`
+    ];
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+    res.send(lines.join('\n') + '\n');
+  });
 
   // Auth Middleware für geschützte API Endpunkte
   app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-    // Öffentliche Auth-Endpunkte
     if (req.path === '/auth/status' || req.path === '/auth/login' || req.path === '/auth/setup') {
       return next();
     }
 
-    // Wenn noch keine Benutzer angelegt sind, Ersteinrichtung verlangen
     if (!userManager.hasUsers()) {
       return res.status(401).json({
         setupRequired: true,
@@ -155,6 +195,36 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     res.json(bot.getStatus());
   });
 
+  // System & Telemetrie Stats für Dashboard
+  app.get('/api/system/stats', (_req: Request, res: Response) => {
+    const mem = process.memoryUsage();
+    res.json({
+      uptimeSec: Math.round(process.uptime()),
+      memoryRssMb: Math.round(mem.rss / 1024 / 1024),
+      memoryHeapMb: Math.round(mem.heapUsed / 1024 / 1024),
+      nodeVersion: process.version,
+      platform: os.platform(),
+      cpus: os.cpus().length,
+      packetsSent: bot.player.totalPacketsSent,
+      bytesSent: bot.player.totalBytesSent,
+      underruns: bot.player.underrunCount
+    });
+  });
+
+  // Track Suche mit Thumbnail & Vorschau
+  app.get('/api/search', async (req: Request, res: Response) => {
+    const q = req.query.q as string;
+    if (!q || !q.trim()) {
+      return res.status(400).json({ error: 'Suchbegriff fehlt' });
+    }
+    try {
+      const results = await bot.resolver.search(q.trim(), 5, 'Web Dashboard');
+      res.json({ results });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   app.post('/api/play', async (req: Request, res: Response) => {
     const { query } = req.body;
     if (!query) {
@@ -217,6 +287,37 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     res.json({ success: true, prev });
   });
 
+  app.post('/api/seek', async (req: Request, res: Response) => {
+    const { position } = req.body;
+    if (typeof position !== 'number') {
+      return res.status(400).json({ error: 'Ungültige Position' });
+    }
+    await bot.player.seek(position);
+    broadcast();
+    res.json({ success: true, position: bot.player.positionSec });
+  });
+
+  app.post('/api/filter', (req: Request, res: Response) => {
+    const { filter } = req.body;
+    if (['normal', 'bassboost', 'nightcore', 'vaporwave', 'loudnorm'].includes(filter)) {
+      bot.player.setFilter(filter as AudioFilterPreset);
+      broadcast();
+      res.json({ success: true, filter: bot.player.activeFilter });
+    } else {
+      res.status(400).json({ error: 'Ungültiger Filter' });
+    }
+  });
+
+  app.post('/api/soundboard', (req: Request, res: Response) => {
+    const { sound } = req.body;
+    if (['airhorn', 'applause', 'notification', 'rimshot'].includes(sound)) {
+      bot.player.playSoundEffect(sound);
+      res.json({ success: true, sound });
+    } else {
+      res.status(400).json({ error: 'Ungültiger Soundboard-Effekt' });
+    }
+  });
+
   app.post('/api/stop', (_req: Request, res: Response) => {
     bot.queue.clear();
     bot.player.stop();
@@ -233,6 +334,51 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     } else {
       res.status(400).json({ error: 'Ungültige Lautstärke' });
     }
+  });
+
+  // Drag & Drop Reordering
+  app.post('/api/queue/move', (req: Request, res: Response) => {
+    const { fromIndex, toIndex } = req.body;
+    if (typeof fromIndex === 'number' && typeof toIndex === 'number') {
+      const ok = bot.queue.move(fromIndex, toIndex);
+      broadcast();
+      res.json({ success: ok });
+    } else {
+      res.status(400).json({ error: 'Indizes fehlen' });
+    }
+  });
+
+  // Playlist Export (JSON oder M3U)
+  app.get('/api/queue/export', (req: Request, res: Response) => {
+    const format = req.query.format === 'm3u' ? 'm3u' : 'json';
+    if (format === 'm3u') {
+      res.setHeader('Content-Type', 'audio/x-mpegurl');
+      res.setHeader('Content-Disposition', 'attachment; filename="redtune-playlist.m3u"');
+      res.send(bot.queue.exportM3U());
+    } else {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', 'attachment; filename="redtune-playlist.json"');
+      res.send(bot.queue.exportJSON());
+    }
+  });
+
+  // Playlist Import
+  app.post('/api/queue/import', (req: Request, res: Response) => {
+    const { playlist } = req.body;
+    if (!playlist) {
+      return res.status(400).json({ error: 'Keine Playlist-Daten übermittelt' });
+    }
+    const count = bot.queue.importJSON(playlist);
+    broadcast();
+    res.json({ success: true, imported: count });
+  });
+
+  app.post('/api/autodj', (req: Request, res: Response) => {
+    const { enabled } = req.body;
+    bot.config.bot.autoDj = Boolean(enabled);
+    saveConfig(path.join(bot.dataDir, 'config.json'), bot.config);
+    broadcast();
+    res.json({ success: true, autoDj: bot.config.bot.autoDj });
   });
 
   app.delete('/api/queue/:index', (req: Request, res: Response) => {
@@ -293,7 +439,6 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     });
   });
 
-  // Cookies speichern
   app.post('/api/youtube/cookies', (req: Request, res: Response) => {
     const { cookies } = req.body;
     if (typeof cookies !== 'string' || cookies.trim().length === 0) {
@@ -301,7 +446,6 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     }
 
     const trimmed = cookies.trim();
-    // Prüfen ob es wie eine Netscape cookie file aussieht
     if (!trimmed.includes('.youtube.com') && !trimmed.includes('youtube.com')) {
       return res.status(400).json({
         error: 'Die Cookies scheinen nicht von YouTube zu stammen (Domain .youtube.com fehlt). Bitte öffne YouTube im Browser und exportiere die Cookies dort.'
@@ -317,7 +461,6 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     }
   });
 
-  // Cookies löschen
   app.delete('/api/youtube/cookies', (_req: Request, res: Response) => {
     try {
       if (fs.existsSync(cookiesPath)) {
@@ -330,7 +473,7 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     }
   });
 
-  // Echter Stream-Verbindungstest mit unzensierter Fehlerausgabe
+  // Echter Stream-Verbindungstest
   app.post('/api/youtube/test', async (_req: Request, res: Response) => {
     const runTest = async (withCookies: boolean) => {
       const testArgs = [
@@ -406,12 +549,10 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
       bot.config.server.channelPassword = channelPassword;
     }
 
-    // In config.json speichern
     const configPath = path.join(bot.dataDir, 'config.json');
     saveConfig(configPath, bot.config);
     console.log('[Web] TeamSpeak Konfiguration aktualisiert und in config.json gespeichert.');
 
-    // Sofortigen Reconnect im Hintergrund ausführen
     bot.reconnect().catch((err) => {
       console.error('[Web] Reconnect-Fehler nach Konfigurationsänderung:', err.message);
     });

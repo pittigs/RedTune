@@ -4,6 +4,7 @@ import OpusScript from 'opusscript';
 import { Codec } from '@honeybbq/teamspeak';
 import type { Track } from './queue.js';
 import { getYtdlpAuthArgs } from './auth-args.js';
+import type { AudioFilterPreset } from '../config.js';
 
 const SAMPLE_RATE = 48000;
 const SAMPLES_PER_FRAME = 960; // 20 ms @ 48 kHz
@@ -26,6 +27,13 @@ export class AudioPlayer {
   public positionSec: number = 0;
   public currentTrack: Track | null = null;
   public lastPlaybackError: string | null = null;
+  public activeFilter: AudioFilterPreset = 'normal';
+
+  // Telemetrie & Performance Metrics
+  public totalPacketsSent: number = 0;
+  public totalBytesSent: number = 0;
+  public underrunCount: number = 0;
+  public playStartTime: number = 0;
 
   public onTrackEnd?: () => void;
   public onStateChange?: () => void;
@@ -70,38 +78,72 @@ export class AudioPlayer {
     this.encoder = new OpusScript(SAMPLE_RATE, channels, app);
     try {
       this.encoder.setBitrate(this._codec === Codec.OpusVoice ? 64000 : 128000);
-      // Complexity 5 (CTL 4010): Optimaler Kompromiss aus Audioqualität und minimaler CPU-Last
-      this.encoder.encoderCTL(4010, 5);
+      this.encoder.encoderCTL(4010, 5); // Complexity 5
     } catch {}
   }
 
-  async play(track: Track): Promise<void> {
-    this.stop();
+  public setFilter(preset: AudioFilterPreset): void {
+    if (this.activeFilter === preset) return;
+    this.activeFilter = preset;
+    console.log(`[Player] Audio-Filter geändert auf: ${preset}`);
+    if (this.isPlaying && this.currentTrack) {
+      // Aktuellen Track nahtlos an der aktuellen Position mit neuem Filter neu starten
+      const pos = this.positionSec;
+      this.play(this.currentTrack, pos);
+    } else {
+      this.onStateChange?.();
+    }
+  }
+
+  public async seek(targetSec: number): Promise<void> {
+    if (!this.isPlaying || !this.currentTrack) return;
+    const clamped = Math.max(0, Math.min(targetSec, this.currentTrack.durationSec || targetSec));
+    console.log(`[Player] Springe zu Sekunde ${clamped} in "${this.currentTrack.title}"...`);
+    await this.play(this.currentTrack, clamped);
+  }
+
+  async play(track: Track, startSec: number = 0): Promise<void> {
+    this.stopProcessesAndTimer();
 
     this.currentTrack = track;
     this.isPlaying = true;
     this.isPaused = false;
-    this.positionSec = 0;
+    this.positionSec = startSec;
+    this.playStartTime = Date.now();
     this.onStateChange?.();
 
-    console.log(`[Player] Starte Wiedergabe: ${track.title}`);
+    console.log(`[Player] Starte Wiedergabe: ${track.title}${startSec > 0 ? ` ab ${startSec}s` : ''} (Filter: ${this.activeFilter})`);
 
-    // Großzügiger 2 MB Puffer für unterbrechungsfreies Streaming
     const pcm = new PassThrough({ highWaterMark: 2 * 1024 * 1024 });
     this.pcmStream = pcm;
 
     try {
       const channels = this.getChannels();
 
-      // 1. ffmpeg Prozess starten (dekodiert Audio in s16le 48kHz mono/stereo)
+      // Audio-Filter-Argumente ermitteln
+      const filterArgs: string[] = [];
+      if (this.activeFilter === 'bassboost') {
+        filterArgs.push('-af', 'equalizer=f=60:width_type=h:width=50:g=12');
+      } else if (this.activeFilter === 'nightcore') {
+        filterArgs.push('-af', 'asetrate=48000*1.25,aresample=48000,atempo=1.05');
+      } else if (this.activeFilter === 'vaporwave') {
+        filterArgs.push('-af', 'asetrate=48000*0.85,aresample=48000,atempo=0.9');
+      } else if (this.activeFilter === 'loudnorm') {
+        filterArgs.push('-af', 'loudnorm=I=-16:TP=-1.5:LRA=11');
+      }
+
+      const seekArgs = startSec > 0 ? ['-ss', String(startSec)] : [];
+
       const ffArgs = [
         '-hide_banner',
         '-loglevel', 'error',
         '-nostdin',
         '-probesize', '131072',
         '-analyzeduration', '500000',
+        ...seekArgs,
         '-i', 'pipe:0',
         '-vn',
+        ...filterArgs,
         '-f', 's16le',
         '-ar', String(SAMPLE_RATE),
         '-ac', String(channels),
@@ -158,7 +200,7 @@ export class AudioPlayer {
         });
 
         yt.on('close', (code) => {
-          if (this.currentProcessYt !== yt) return; // gestoppt oder ersetzt
+          if (this.currentProcessYt !== yt) return;
           if (code !== 0 && code !== null) {
             const details = ytStderr.trim() || 'Keine Fehlerausgabe';
             console.error(`[Player] yt-dlp beendet mit Code ${code}${withCookies ? '' : ' (ohne Cookies)'}. Details:`, details);
@@ -190,8 +232,7 @@ export class AudioPlayer {
         this.handleEnd();
       });
 
-      // 3. Audio-Schleife mit Jitter-freiem Drift-Ausgleich starten
-      this.startAudioLoop();
+      this.startAudioLoop(startSec);
     } catch (err: any) {
       console.error('[Player] Start-Fehler:', err);
       this.lastPlaybackError = err?.message || String(err);
@@ -199,21 +240,19 @@ export class AudioPlayer {
     }
   }
 
-  private startAudioLoop(): void {
+  private startAudioLoop(initialOffsetSec: number = 0): void {
     const channels = this.getChannels();
     const frameBytes = SAMPLES_PER_FRAME * channels * 2;
-    // 1500 ms Prebuffer verhindert Buffer-Underruns durch Netzwerklatenz
     const prebufferBytes = (SAMPLE_RATE * channels * 2 * 1500) / 1000;
 
-    let frameCount = 0n;
-    let startTime = process.hrtime.bigint();
+    let frameCount = BigInt(Math.round(initialOffsetSec * 50));
+    let startTime = process.hrtime.bigint() - frameCount * FRAME_DURATION_NS;
     let isPrebuffering = true;
 
     const tick = () => {
       if (!this.isPlaying) return;
 
       if (this.isPaused) {
-        // Zeitbasis mitführen, damit positionSec während Pause nicht abweicht
         startTime = process.hrtime.bigint() - frameCount * FRAME_DURATION_NS;
         this.timer = setTimeout(tick, 40);
         return;
@@ -222,7 +261,6 @@ export class AudioPlayer {
       const pcm = this.pcmStream;
       if (!pcm) return;
 
-      // 1. Initialer Prebuffer vor Start der Wiedergabe
       if (isPrebuffering) {
         if (pcm.readableLength < prebufferBytes && !pcm.writableFinished) {
           this.timer = setTimeout(tick, 20);
@@ -232,10 +270,8 @@ export class AudioPlayer {
         startTime = process.hrtime.bigint() - frameCount * FRAME_DURATION_NS;
       }
 
-      // 2. Umgang mit Buffer-Underrun / Latenzloch
       if (pcm.readableLength < frameBytes) {
         if (pcm.writableFinished) {
-          // Stream beendet
           if (pcm.readableLength > 0) {
             const rest = pcm.read(pcm.readableLength) as Buffer;
             const frame = Buffer.alloc(frameBytes);
@@ -246,7 +282,7 @@ export class AudioPlayer {
           return;
         }
 
-        // Kein vollständiges Frame verfügbar -> Stille-Paket senden, um Jitter-Buffer-Abriss (Knistern) zu verhindern
+        this.underrunCount++;
         try {
           this.voiceSender(OPUS_SILENCE_PACKET, this._codec);
         } catch {}
@@ -255,7 +291,6 @@ export class AudioPlayer {
         return;
       }
 
-      // 3. 20ms Frame lesen und senden
       const frame = pcm.read(frameBytes) as Buffer;
       if (frame && frame.length === frameBytes) {
         this.sendFrame(frame);
@@ -267,24 +302,19 @@ export class AudioPlayer {
         }
       }
 
-      // 4. Drift-freier Timer mit Nanosekunden-Genauigkeit (process.hrtime.bigint)
       const targetNs = startTime + frameCount * FRAME_DURATION_NS;
       const nowNs = process.hrtime.bigint();
       const diffNs = targetNs - nowNs;
       const diffMs = Number(diffNs / 1_000_000n);
 
       if (diffMs > 2) {
-        // Node.js setTimeout feuert minimal später, daher 1ms Vorlauf abziehen
         this.timer = setTimeout(tick, Math.max(1, diffMs - 1));
       } else if (diffMs >= 0) {
         this.timer = setImmediate(tick);
       } else {
-        // Wir liegen hinter der Zielzeit (z. B. Event-Loop-Verzögerung oder GC)
         if (diffMs < -200) {
-          // Große Verzögerung (System-Schlafmodus etc.): Zeitbasis neu synchronisieren
           startTime = nowNs - frameCount * FRAME_DURATION_NS;
         }
-        // Sofort aufholen ohne Wartezeit
         this.timer = setImmediate(tick);
       }
     };
@@ -293,7 +323,6 @@ export class AudioPlayer {
   }
 
   private sendFrame(frame: Buffer): void {
-    // Schnelle Vektor-Lautstärkeskalierung mit Int16Array ohne Garbage-Collection-Last
     const volMultiplier = Math.max(0, Math.min(100, this.volume)) / 100;
     if (volMultiplier < 1.0) {
       const samples = new Int16Array(frame.buffer, frame.byteOffset, frame.byteLength / 2);
@@ -305,9 +334,58 @@ export class AudioPlayer {
     try {
       const opusPacket = this.encoder.encode(frame, SAMPLES_PER_FRAME);
       this.voiceSender(opusPacket, this._codec);
+      this.totalPacketsSent++;
+      this.totalBytesSent += opusPacket.length;
     } catch (err) {
       console.error('[Player] Opus Encoding Fehler:', err);
     }
+  }
+
+  // Soundboard Synthese für Sofort-Effekte
+  public playSoundEffect(type: 'airhorn' | 'applause' | 'notification' | 'rimshot'): void {
+    const channels = this.getChannels();
+    const totalFrames = type === 'airhorn' ? 60 : 35; // ca. 0.7 - 1.2s
+
+    let f = 0;
+    const playEffectLoop = () => {
+      if (f >= totalFrames) return;
+      const samples = new Int16Array(SAMPLES_PER_FRAME * channels);
+      for (let s = 0; s < SAMPLES_PER_FRAME; s++) {
+        const time = (f * SAMPLES_PER_FRAME + s) / SAMPLE_RATE;
+        let val = 0;
+        if (type === 'airhorn') {
+          // Zweiklang 466 Hz (Bb4) + 622 Hz (Eb5) mit Sägezahn/Distortion
+          const freq1 = 466.16;
+          const freq2 = 622.25;
+          const env = Math.min(1, f / 5) * Math.max(0, 1 - f / totalFrames);
+          val = ((Math.sin(2 * Math.PI * freq1 * time) + Math.sin(2 * Math.PI * freq2 * time)) * 0.4) * env;
+        } else if (type === 'notification') {
+          // Glockenklang 880Hz -> 1760Hz
+          const freq = f < 15 ? 880 : 1760;
+          const env = Math.exp(-((f % 15) * 0.15));
+          val = Math.sin(2 * Math.PI * freq * time) * env * 0.5;
+        } else {
+          // Percussiver Rausch-Impuls
+          val = (Math.random() * 2 - 1) * Math.exp(-f * 0.1) * 0.3;
+        }
+
+        const sampleVal = Math.round(val * 24000);
+        for (let c = 0; c < channels; c++) {
+          samples[s * channels + c] = sampleVal;
+        }
+      }
+
+      const buf = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
+      try {
+        const packet = this.encoder.encode(buf, SAMPLES_PER_FRAME);
+        this.voiceSender(packet, this._codec);
+      } catch {}
+
+      f++;
+      setTimeout(playEffectLoop, 20);
+    };
+
+    playEffectLoop();
   }
 
   private handleEnd(): void {
@@ -333,17 +411,11 @@ export class AudioPlayer {
     }
   }
 
-  stop(): void {
+  private stopProcessesAndTimer(): void {
     if (this.timer) {
       clearTimeout(this.timer as NodeJS.Timeout);
       clearImmediate(this.timer as NodeJS.Immediate);
       this.timer = undefined;
-    }
-
-    if (this.isPlaying) {
-      try {
-        this.voiceSender(OPUS_SILENCE_PACKET, this._codec);
-      } catch {}
     }
 
     if (this.currentProcessYt) {
@@ -359,6 +431,16 @@ export class AudioPlayer {
     if (this.pcmStream) {
       this.pcmStream.destroy();
       this.pcmStream = undefined;
+    }
+  }
+
+  stop(): void {
+    this.stopProcessesAndTimer();
+
+    if (this.isPlaying) {
+      try {
+        this.voiceSender(OPUS_SILENCE_PACKET, this._codec);
+      } catch {}
     }
 
     this.isPlaying = false;

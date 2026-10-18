@@ -1,4 +1,4 @@
-// RedTune – TeamSpeak 6 YouTube Music Bot Web Dashboard Client
+// RedTune – TeamSpeak 6 & 3 YouTube Music Bot Web Dashboard Client
 
 const connectionBadge = document.getElementById('connectionBadge');
 const connectionText = document.getElementById('connectionText');
@@ -7,6 +7,7 @@ const serverText = document.getElementById('serverText');
 const userBadge = document.getElementById('userBadge');
 const userName = document.getElementById('userName');
 const logoutBtn = document.getElementById('logoutBtn');
+const themeToggleBtn = document.getElementById('themeToggleBtn');
 
 const authOverlay = document.getElementById('authOverlay');
 const setupCard = document.getElementById('setupCard');
@@ -25,15 +26,19 @@ const loginError = document.getElementById('loginError');
 const searchForm = document.getElementById('searchForm');
 const searchInput = document.getElementById('searchInput');
 const searchButton = document.getElementById('searchButton');
+const searchInstantBtn = document.getElementById('searchInstantBtn');
+const searchResultsDropdown = document.getElementById('searchResultsDropdown');
 
 const trackTitle = document.getElementById('trackTitle');
 const trackMeta = document.getElementById('trackMeta');
 const trackThumbnail = document.getElementById('trackThumbnail');
 const albumArtPlaceholder = document.getElementById('albumArtPlaceholder');
 
+const progressBarBg = document.getElementById('progressBarBg');
 const progressBarFill = document.getElementById('progressBarFill');
 const currentTime = document.getElementById('currentTime');
 const totalTime = document.getElementById('totalTime');
+const visualizerCanvas = document.getElementById('visualizerCanvas');
 
 const playPauseBtn = document.getElementById('playPauseBtn');
 const playIcon = document.getElementById('playIcon');
@@ -44,15 +49,37 @@ const stopBtn = document.getElementById('stopBtn');
 
 const volumeSlider = document.getElementById('volumeSlider');
 const volumeValue = document.getElementById('volumeValue');
+const volIcon = document.getElementById('volIcon');
 
 const queueCount = document.getElementById('queueCount');
 const queueList = document.getElementById('queueList');
 const shuffleBtn = document.getElementById('shuffleBtn');
 const clearQueueBtn = document.getElementById('clearQueueBtn');
+const autoDjCheckbox = document.getElementById('autoDjCheckbox');
+const exportQueueBtn = document.getElementById('exportQueueBtn');
+const importPlaylistInput = document.getElementById('importPlaylistInput');
+
+const toastContainer = document.getElementById('toastContainer');
 
 let currentStatus = null;
 let ws = null;
 let authToken = localStorage.getItem('redtune_auth') || '';
+let draggedItemIndex = null;
+
+// Toast Benachrichtigungen
+function showToast(message, isError = false) {
+  if (!toastContainer) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${isError ? 'toast-error' : ''}`;
+  toast.textContent = message;
+  toastContainer.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(8px)';
+    toast.style.transition = 'all 0.25s ease';
+    setTimeout(() => toast.remove(), 250);
+  }, 3200);
+}
 
 // Authentifizierter Fetch Helper
 async function apiFetch(url, options = {}) {
@@ -101,16 +128,7 @@ async function checkAuth() {
       showLoginOverlay();
     }
   } catch (err) {
-    // Falls Fehler, erneut prüfen ob Setup nötig ist
-    try {
-      const res = await fetch('/api/auth/status');
-      const data = await res.json();
-      if (data.setupRequired) {
-        showSetupOverlay();
-        return;
-      }
-    } catch {}
-    showLoginOverlay();
+    console.warn('[Auth] Status-Prüfung:', err.message);
   }
 }
 
@@ -118,32 +136,26 @@ function showSetupOverlay() {
   authOverlay.classList.remove('hidden');
   setupCard.classList.remove('hidden');
   loginCard.classList.add('hidden');
-  setupError.classList.add('hidden');
-  setupUsername.focus();
 }
 
 function showLoginOverlay() {
   authOverlay.classList.remove('hidden');
-  loginCard.classList.remove('hidden');
   setupCard.classList.add('hidden');
-  loginError.classList.add('hidden');
-  loginUsername.focus();
+  loginCard.classList.remove('hidden');
 }
 
 function hideAuthOverlay() {
   authOverlay.classList.add('hidden');
   setupCard.classList.add('hidden');
   loginCard.classList.add('hidden');
-  setupError.classList.add('hidden');
-  loginError.classList.add('hidden');
 }
 
 function showUserBadge(user) {
   if (user && user.username) {
     userName.textContent = user.username;
     userBadge.classList.remove('hidden');
+    logoutBtn.classList.remove('hidden');
   }
-  logoutBtn.classList.remove('hidden');
 }
 
 function hideUserBadge() {
@@ -151,7 +163,7 @@ function hideUserBadge() {
   logoutBtn.classList.add('hidden');
 }
 
-// Setup Formular (Ersteinrichtung)
+// Setup Formular
 setupForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const username = setupUsername.value.trim();
@@ -160,13 +172,7 @@ setupForm.addEventListener('submit', async (e) => {
   setupError.classList.add('hidden');
 
   if (password !== confirm) {
-    setupError.textContent = 'Passwörter stimmen nicht überein.';
-    setupError.classList.remove('hidden');
-    return;
-  }
-
-  if (password.length < 6) {
-    setupError.textContent = 'Passwort muss mindestens 6 Zeichen lang sein.';
+    setupError.textContent = 'Die Passwörter stimmen nicht überein.';
     setupError.classList.remove('hidden');
     return;
   }
@@ -179,15 +185,14 @@ setupForm.addEventListener('submit', async (e) => {
     });
 
     const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Fehler bei der Registrierung');
-    }
+    if (!res.ok) throw new Error(data.error || 'Ersteinrichtung fehlgeschlagen');
 
     authToken = data.token;
     localStorage.setItem('redtune_auth', authToken);
     hideAuthOverlay();
     showUserBadge(data.user);
     initApp();
+    showToast(`Willkommen, ${username}! Administrator-Account eingerichtet.`);
   } catch (err) {
     setupError.textContent = err.message;
     setupError.classList.remove('hidden');
@@ -209,15 +214,14 @@ loginForm.addEventListener('submit', async (e) => {
     });
 
     const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Ungültige Anmeldedaten');
-    }
+    if (!res.ok) throw new Error(data.error || 'Ungültige Anmeldedaten');
 
     authToken = data.token;
     localStorage.setItem('redtune_auth', authToken);
     hideAuthOverlay();
     showUserBadge(data.user);
     initApp();
+    showToast(`Erfolgreich angemeldet als ${username}.`);
   } catch (err) {
     loginError.textContent = err.message;
     loginError.classList.remove('hidden');
@@ -240,6 +244,15 @@ logoutBtn.addEventListener('click', async () => {
 function initApp() {
   fetchStatus();
   initWebSocket();
+  initVisualizer();
+  initScrubber();
+  initFilterButtons();
+  initSoundboardButtons();
+  initInstantSearch();
+  initAutoDj();
+  initPlaylistExportImport();
+  initThemeSwitcher();
+  initKeyboardShortcuts();
 }
 
 // WebSocket mit Auth Token
@@ -350,6 +363,13 @@ function renderStatus(status) {
       playIcon.classList.remove('hidden');
       pauseIcon.classList.add('hidden');
     }
+
+    // Aktiven Filter hervorheben
+    if (player.filter) {
+      document.querySelectorAll('.filter-chips .chip').forEach(c => {
+        c.classList.toggle('active', c.dataset.filter === player.filter);
+      });
+    }
   } else {
     trackTitle.textContent = 'Keine Wiedergabe';
     trackMeta.textContent = 'Füge Musik über die Suche oder TeamSpeak hinzu';
@@ -365,6 +385,10 @@ function renderStatus(status) {
   if (player && typeof player.volume === 'number') {
     volumeSlider.value = player.volume;
     volumeValue.textContent = `${player.volume}%`;
+  }
+
+  if (autoDjCheckbox && status.queue) {
+    autoDjCheckbox.checked = Boolean(status.queue.autoDj);
   }
 
   renderQueue(status.queue?.items || []);
@@ -384,8 +408,8 @@ function renderQueue(items) {
   }
 
   queueList.innerHTML = items.map((item, idx) => `
-    <div class="queue-item" data-index="${idx}">
-      <span class="queue-item-idx">#${idx + 1}</span>
+    <div class="queue-item" draggable="true" data-index="${idx}">
+      <span class="queue-item-idx" style="cursor: grab;">☰ #${idx + 1}</span>
       <div class="queue-item-info">
         <div class="queue-item-title">${escapeHtml(item.title)}</div>
         <div class="queue-item-meta">${formatTime(item.durationSec)} • ${escapeHtml(item.requestedBy)}</div>
@@ -397,6 +421,329 @@ function renderQueue(items) {
       </button>
     </div>
   `).join('');
+
+  setupDragAndDrop();
+}
+
+// Drag & Drop Queue Reordering
+function setupDragAndDrop() {
+  const elements = queueList.querySelectorAll('.queue-item');
+  elements.forEach(item => {
+    item.addEventListener('dragstart', (e) => {
+      draggedItemIndex = parseInt(item.dataset.index, 10);
+      item.classList.add('dragging');
+    });
+
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+      elements.forEach(el => el.classList.remove('drag-over'));
+    });
+
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      item.classList.add('drag-over');
+    });
+
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('drag-over');
+    });
+
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('drag-over');
+      const targetIndex = parseInt(item.dataset.index, 10);
+      if (draggedItemIndex !== null && draggedItemIndex !== targetIndex) {
+        try {
+          await apiFetch('/api/queue/move', {
+            method: 'POST',
+            body: JSON.stringify({ fromIndex: draggedItemIndex, toIndex: targetIndex })
+          });
+          showToast(`Titel verschoben an Position #${targetIndex + 1}.`);
+        } catch (err) {
+          showToast(err.message, true);
+        }
+      }
+    });
+  });
+}
+
+// Interaktiver Scrubber (Seek)
+function initScrubber() {
+  if (!progressBarBg) return;
+  progressBarBg.addEventListener('click', async (e) => {
+    if (!currentStatus?.player?.currentTrack) return;
+    const rect = progressBarBg.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+    const duration = currentStatus.player.currentTrack.durationSec || 0;
+    if (duration <= 0) return;
+
+    const targetSec = Math.round(ratio * duration);
+    try {
+      await apiFetch('/api/seek', {
+        method: 'POST',
+        body: JSON.stringify({ position: targetSec })
+      });
+      showToast(`Gespult zu ${formatTime(targetSec)}.`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+}
+
+// Audio Visualizer Canvas
+function initVisualizer() {
+  if (!visualizerCanvas) return;
+  const ctx = visualizerCanvas.getContext('2d');
+  const barCount = 32;
+  const bars = Array(barCount).fill(4);
+
+  function draw() {
+    requestAnimationFrame(draw);
+    ctx.clearRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+
+    const isPlaying = currentStatus?.player?.isPlaying && !currentStatus?.player?.isPaused;
+    const volRatio = (currentStatus?.player?.volume || 50) / 100;
+
+    for (let i = 0; i < barCount; i++) {
+      if (isPlaying) {
+        const target = (Math.sin(Date.now() * 0.005 + i * 0.4) * 0.5 + 0.5) * 32 * volRatio + 3;
+        bars[i] += (target - bars[i]) * 0.25;
+      } else {
+        bars[i] += (2 - bars[i]) * 0.1;
+      }
+
+      const barWidth = visualizerCanvas.width / barCount - 2;
+      const x = i * (barWidth + 2);
+      const h = Math.max(2, bars[i]);
+      const y = visualizerCanvas.height - h;
+
+      const grad = ctx.createLinearGradient(0, y, 0, visualizerCanvas.height);
+      grad.addColorStop(0, '#ff0033');
+      grad.addColorStop(1, '#ff3366');
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, y, barWidth, h);
+    }
+  }
+
+  draw();
+}
+
+// Audio-Filter Presets
+function initFilterButtons() {
+  document.querySelectorAll('.filter-chips .chip').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const filter = btn.dataset.filter;
+      try {
+        await apiFetch('/api/filter', {
+          method: 'POST',
+          body: JSON.stringify({ filter })
+        });
+        document.querySelectorAll('.filter-chips .chip').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        showToast(`Filter aktiviert: ${filter.toUpperCase()}`);
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  });
+}
+
+// Soundboard Trigger
+function initSoundboardButtons() {
+  document.querySelectorAll('.soundboard-row .btn-sb').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sound = btn.dataset.sound;
+      try {
+        await apiFetch('/api/soundboard', {
+          method: 'POST',
+          body: JSON.stringify({ sound })
+        });
+        showToast(`📢 Soundboard: ${sound}`);
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  });
+}
+
+// Live-Suche & Vorschau Dropdown
+function initInstantSearch() {
+  if (!searchInstantBtn || !searchResultsDropdown) return;
+
+  searchInstantBtn.addEventListener('click', async () => {
+    const q = searchInput.value.trim();
+    if (!q) {
+      showToast('Bitte einen Suchbegriff eingeben.', true);
+      return;
+    }
+
+    searchInstantBtn.disabled = true;
+    searchInstantBtn.innerHTML = '<span>Suche...</span>';
+
+    try {
+      const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Suche fehlgeschlagen');
+
+      if (!data.results || data.results.length === 0) {
+        showToast('Keine Treffer gefunden.', true);
+        return;
+      }
+
+      searchResultsDropdown.innerHTML = data.results.map(r => `
+        <div class="search-result-item">
+          <img src="${r.thumbnail || ''}" class="search-result-thumb" alt="" />
+          <div class="search-result-info">
+            <div class="search-result-title">${escapeHtml(r.title)}</div>
+            <div class="search-result-duration">${formatTime(r.durationSec)}</div>
+          </div>
+          <div class="search-result-actions">
+            <button class="btn-play-now" onclick="playSearchResult('${escapeHtml(r.url)}')">▶ Abspielen</button>
+            <button class="btn-add-queue" onclick="queueSearchResult('${escapeHtml(r.url)}')">+ Queue</button>
+          </div>
+        </div>
+      `).join('');
+
+      searchResultsDropdown.classList.remove('hidden');
+    } catch (err) {
+      showToast(err.message, true);
+    } finally {
+      searchInstantBtn.disabled = false;
+      searchInstantBtn.innerHTML = '<span>Vorschau</span>';
+    }
+  });
+
+  // Klick außerhalb schließt das Dropdown
+  document.addEventListener('click', (e) => {
+    if (!searchForm.contains(e.target) && !searchResultsDropdown.contains(e.target)) {
+      searchResultsDropdown.classList.add('hidden');
+    }
+  });
+}
+
+window.playSearchResult = async function(url) {
+  try {
+    searchResultsDropdown.classList.add('hidden');
+    await apiFetch('/api/play', {
+      method: 'POST',
+      body: JSON.stringify({ query: url })
+    });
+    showToast('Titel wird abgespielt!');
+  } catch (err) {
+    showToast(err.message, true);
+  }
+};
+
+window.queueSearchResult = async function(url) {
+  try {
+    await apiFetch('/api/play', {
+      method: 'POST',
+      body: JSON.stringify({ query: url })
+    });
+    showToast('Zur Warteschlange hinzugefügt!');
+  } catch (err) {
+    showToast(err.message, true);
+  }
+};
+
+// Auto-DJ Toggle
+function initAutoDj() {
+  if (!autoDjCheckbox) return;
+  autoDjCheckbox.addEventListener('change', async () => {
+    try {
+      await apiFetch('/api/autodj', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: autoDjCheckbox.checked })
+      });
+      showToast(`Auto-DJ ${autoDjCheckbox.checked ? 'aktiviert 📻' : 'deaktiviert'}.`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+}
+
+// Playlist Export & Import
+function initPlaylistExportImport() {
+  if (exportQueueBtn) {
+    exportQueueBtn.addEventListener('click', () => {
+      window.open('/api/queue/export?format=json', '_blank');
+      showToast('Warteschlange als JSON exportiert!');
+    });
+  }
+
+  if (importPlaylistInput) {
+    importPlaylistInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const content = JSON.parse(event.target.result);
+          const res = await apiFetch('/api/queue/import', {
+            method: 'POST',
+            body: JSON.stringify({ playlist: content })
+          });
+          const data = await res.json();
+          showToast(`Playlist importiert: ${data.imported} Titel hinzugefügt!`);
+        } catch (err) {
+          showToast(`Import-Fehler: ${err.message}`, true);
+        }
+      };
+      reader.readAsText(file);
+    });
+  }
+}
+
+// Theme Switcher (Dark, Cyberpunk, OLED, Glass)
+function initThemeSwitcher() {
+  const themes = ['dark', 'cyberpunk', 'oled', 'glass'];
+  const savedTheme = localStorage.getItem('redtune_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', savedTheme);
+
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', () => {
+      const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+      const nextIdx = (themes.indexOf(cur) + 1) % themes.length;
+      const nextTheme = themes[nextIdx];
+      document.documentElement.setAttribute('data-theme', nextTheme);
+      localStorage.setItem('redtune_theme', nextTheme);
+      showToast(`Design gewechselt zu: ${nextTheme.toUpperCase()}`);
+    });
+  }
+}
+
+// Tastatur-Hotkeys
+function initKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      playPauseBtn.click();
+    } else if (e.code === 'ArrowRight') {
+      e.preventDefault();
+      if (currentStatus?.player?.currentTrack) {
+        const cur = currentStatus.player.positionSec || 0;
+        apiFetch('/api/seek', { method: 'POST', body: JSON.stringify({ position: cur + 10 }) });
+      }
+    } else if (e.code === 'ArrowLeft') {
+      e.preventDefault();
+      if (currentStatus?.player?.currentTrack) {
+        const cur = currentStatus.player.positionSec || 0;
+        apiFetch('/api/seek', { method: 'POST', body: JSON.stringify({ position: Math.max(0, cur - 10) }) });
+      }
+    } else if (e.code === 'ArrowUp') {
+      e.preventDefault();
+      const vol = Math.min(100, (currentStatus?.player?.volume || 50) + 5);
+      apiFetch('/api/volume', { method: 'POST', body: JSON.stringify({ volume: vol }) });
+    } else if (e.code === 'ArrowDown') {
+      e.preventDefault();
+      const vol = Math.max(0, (currentStatus?.player?.volume || 50) - 5);
+      apiFetch('/api/volume', { method: 'POST', body: JSON.stringify({ volume: vol }) });
+    }
+  });
 }
 
 function formatTime(seconds) {
@@ -411,7 +758,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Event Listeners
+// Standard Button Event Listeners
 searchForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const query = searchInput.value.trim();
@@ -428,13 +775,13 @@ searchForm.addEventListener('submit', async (e) => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Fehler beim Abspielen');
     searchInput.value = '';
+    showToast(`Track gestartet: ${data.track?.title || query}`);
   } catch (err) {
     if (err.message.includes('Sign in') || err.message.includes('bot') || err.message.includes('Bot-Erkennung') || err.message.includes('Anmeldung')) {
-      showYtFeedback('YouTube verlangt eine Verifizierung per cookies.txt, da der Server als Bot eingestuft wird. Bitte lade deine cookies.txt hoch.', false);
+      showToast('YouTube verlangt eine Verifizierung per cookies.txt.', true);
       ytModal.classList.remove('hidden');
-      fetchYtStatus();
     } else {
-      alert(`Fehler: ${err.message}`);
+      showToast(`Fehler: ${err.message}`, true);
     }
   } finally {
     searchButton.disabled = false;
@@ -453,12 +800,12 @@ playPauseBtn.addEventListener('click', async () => {
   }
 });
 
-nextBtn.addEventListener('click', async () => {
-  await apiFetch('/api/skip', { method: 'POST' });
-});
-
 prevBtn.addEventListener('click', async () => {
   await apiFetch('/api/previous', { method: 'POST' });
+});
+
+nextBtn.addEventListener('click', async () => {
+  await apiFetch('/api/skip', { method: 'POST' });
 });
 
 stopBtn.addEventListener('click', async () => {
@@ -479,68 +826,30 @@ volumeSlider.addEventListener('change', async (e) => {
 
 shuffleBtn.addEventListener('click', async () => {
   await apiFetch('/api/queue/shuffle', { method: 'POST' });
+  showToast('Warteschlange gemischt!');
 });
 
 clearQueueBtn.addEventListener('click', async () => {
-  await apiFetch('/api/queue/clear', { method: 'POST' });
+  if (confirm('Möchtest du die Warteschlange wirklich leeren?')) {
+    await apiFetch('/api/queue/clear', { method: 'POST' });
+    showToast('Warteschlange geleert.');
+  }
 });
 
-window.removeQueueItem = async (index) => {
+window.removeQueueItem = async function(index) {
   await apiFetch(`/api/queue/${index}`, { method: 'DELETE' });
 };
 
-// --- YouTube & Bot-Schutz Modal ---
-const ytModal = document.getElementById('ytModal');
+// Settings Modal Steuerung (TeamSpeak & YouTube Cookies & Telemetrie)
 const ytSettingsBtn = document.getElementById('ytSettingsBtn');
-const ytCloseBtn = document.getElementById('ytCloseBtn');
-const ytStatusBox = document.getElementById('ytStatusBox');
-const ytStatusText = document.getElementById('ytStatusText');
-
-const ytCookieFileInput = document.getElementById('ytCookieFileInput');
-const ytFileLabelText = document.getElementById('ytFileLabelText');
-const ytCookieForm = document.getElementById('ytCookieForm');
-const ytCookieInput = document.getElementById('ytCookieInput');
-const ytFeedback = document.getElementById('ytFeedback');
-const ytTestBtn = document.getElementById('ytTestBtn');
-const ytDeleteBtn = document.getElementById('ytDeleteBtn');
-
-function showYtFeedback(msg, isSuccess = false) {
-  ytFeedback.textContent = msg;
-  ytFeedback.classList.remove('hidden');
-  if (isSuccess) {
-    ytFeedback.classList.add('yt-feedback-success');
-  } else {
-    ytFeedback.classList.remove('yt-feedback-success');
-  }
-}
-
-async function fetchYtStatus() {
-  try {
-    const res = await apiFetch('/api/youtube/status');
-    const data = await res.json();
-
-    if (data.hasCookies && data.cookiesInfo) {
-      ytStatusBox.classList.add('active');
-      ytStatusText.textContent = `✔ Cookies aktiv (${data.cookiesInfo.lines} Zeilen, ${Math.round(data.cookiesInfo.size / 1024)} KB)`;
-      if (ytDeleteBtn) ytDeleteBtn.classList.remove('hidden');
-    } else {
-      ytStatusBox.classList.remove('active');
-      ytStatusText.textContent = 'Keine Cookies hinterlegt (Bot-Schutz sperrt Downloads)';
-      if (ytDeleteBtn) ytDeleteBtn.classList.add('hidden');
-    }
-  } catch (err) {
-    ytStatusText.textContent = 'Fehler beim Abfragen des Cookie-Status';
-  }
-}
-
-// --- Settings Modal Tabs & Controls ---
+const ytModal = document.getElementById('ytModal');
 const tabTsBtn = document.getElementById('tabTsBtn');
 const tabYtBtn = document.getElementById('tabYtBtn');
+const tabStatsBtn = document.getElementById('tabStatsBtn');
 const tabTsContent = document.getElementById('tabTsContent');
 const tabYtContent = document.getElementById('tabYtContent');
+const tabStatsContent = document.getElementById('tabStatsContent');
 
-const tsStatusBox = document.getElementById('tsStatusBox');
-const tsStatusText = document.getElementById('tsStatusText');
 const tsSettingsForm = document.getElementById('tsSettingsForm');
 const tsAddressInput = document.getElementById('tsAddressInput');
 const tsPasswordInput = document.getElementById('tsPasswordInput');
@@ -548,193 +857,73 @@ const tsNicknameInput = document.getElementById('tsNicknameInput');
 const tsChannelInput = document.getElementById('tsChannelInput');
 const tsChannelPasswordInput = document.getElementById('tsChannelPasswordInput');
 const tsFeedback = document.getElementById('tsFeedback');
-const tsSaveBtn = document.getElementById('tsSaveBtn');
-const tsCloseBtn = document.getElementById('tsCloseBtn');
+const tsStatusBox = document.getElementById('tsStatusBox');
+const tsStatusText = document.getElementById('tsStatusText');
 
-function switchSettingsTab(tab) {
-  if (tab === 'teamspeak') {
-    if (tabTsBtn) tabTsBtn.classList.add('active');
-    if (tabYtBtn) tabYtBtn.classList.remove('active');
-    if (tabTsContent) tabTsContent.classList.remove('hidden');
-    if (tabYtContent) tabYtContent.classList.add('hidden');
-    fetchTsConfig();
-  } else {
-    if (tabYtBtn) tabYtBtn.classList.add('active');
-    if (tabTsBtn) tabTsBtn.classList.remove('active');
-    if (tabYtContent) tabYtContent.classList.remove('hidden');
-    if (tabTsContent) tabTsContent.classList.add('hidden');
-    fetchYtStatus();
-  }
+const ytCookieForm = document.getElementById('ytCookieForm');
+const ytCookieFileInput = document.getElementById('ytCookieFileInput');
+const ytFileLabelText = document.getElementById('ytFileLabelText');
+const ytCookieInput = document.getElementById('ytCookieInput');
+const ytFeedback = document.getElementById('ytFeedback');
+const ytStatusBox = document.getElementById('ytStatusBox');
+const ytStatusText = document.getElementById('ytStatusText');
+const ytTestBtn = document.getElementById('ytTestBtn');
+const ytDeleteBtn = document.getElementById('ytDeleteBtn');
+
+// Telemetrie Werte
+const statRam = document.getElementById('statRam');
+const statUptime = document.getElementById('statUptime');
+const statPackets = document.getElementById('statPackets');
+const statUnderruns = document.getElementById('statUnderruns');
+
+if (tabTsBtn && tabYtBtn && tabStatsBtn) {
+  tabTsBtn.addEventListener('click', () => {
+    tabTsBtn.classList.add('active');
+    tabYtBtn.classList.remove('active');
+    tabStatsBtn.classList.remove('active');
+    tabTsContent.classList.remove('hidden');
+    tabYtContent.classList.add('hidden');
+    tabStatsContent.classList.add('hidden');
+  });
+
+  tabYtBtn.addEventListener('click', () => {
+    tabYtBtn.classList.add('active');
+    tabTsBtn.classList.remove('active');
+    tabStatsBtn.classList.remove('active');
+    tabYtContent.classList.remove('hidden');
+    tabTsContent.classList.add('hidden');
+    tabStatsContent.classList.add('hidden');
+  });
+
+  tabStatsBtn.addEventListener('click', async () => {
+    tabStatsBtn.classList.add('active');
+    tabTsBtn.classList.remove('active');
+    tabYtBtn.classList.remove('active');
+    tabStatsContent.classList.remove('hidden');
+    tabTsContent.classList.add('hidden');
+    tabYtContent.classList.add('hidden');
+    loadTelemetryStats();
+  });
 }
 
-function openSettingsModal(tab = 'teamspeak') {
-  if (!ytModal) return;
-  ytModal.classList.remove('hidden');
-  if (ytFeedback) ytFeedback.classList.add('hidden');
-  if (tsFeedback) tsFeedback.classList.add('hidden');
-  switchSettingsTab(tab);
-}
-
-if (tabTsBtn) tabTsBtn.addEventListener('click', () => switchSettingsTab('teamspeak'));
-if (tabYtBtn) tabYtBtn.addEventListener('click', () => switchSettingsTab('youtube'));
-if (ytSettingsBtn) ytSettingsBtn.addEventListener('click', () => openSettingsModal('teamspeak'));
-if (connectionBadge) connectionBadge.addEventListener('click', () => openSettingsModal('teamspeak'));
-if (tsCloseBtn) tsCloseBtn.addEventListener('click', () => ytModal.classList.add('hidden'));
-
-async function fetchTsConfig() {
+async function loadTelemetryStats() {
   try {
-    const res = await apiFetch('/api/teamspeak/config');
+    const res = await apiFetch('/api/system/stats');
     const data = await res.json();
-    if (data.address && data.address !== 'DEINE_SERVER_IP_ODER_DOMAIN' && data.address !== 'ts.deinedomain.de:9987') {
-      tsAddressInput.value = data.address;
-    } else {
-      tsAddressInput.value = '';
-    }
-    tsNicknameInput.value = data.nickname || 'RedTune';
-    tsChannelInput.value = data.channel || '';
-
-    const st = data.status || currentStatus;
-    if (st && st.connected) {
-      tsStatusBox.className = 'yt-status-box active';
-      tsStatusText.textContent = `✔ Verbunden mit ${data.address}${st.currentChannel ? ` (${st.currentChannel})` : ''}`;
-    } else if (st && st.isConnecting) {
-      tsStatusBox.className = 'yt-status-box connecting';
-      tsStatusText.textContent = `⏳ Verbindungsversuch zu ${data.address || 'TeamSpeak'}...`;
-    } else {
-      tsStatusBox.className = 'yt-status-box error';
-      tsStatusText.textContent = st?.lastError 
-        ? `❌ Nicht verbunden: ${st.lastError}` 
-        : '❌ Nicht mit TeamSpeak verbunden';
-    }
-  } catch (err) {
-    console.error('Fehler beim Abrufen der TS-Konfiguration:', err);
-  }
+    if (statRam) statRam.textContent = `${data.memoryRssMb} MB`;
+    if (statUptime) statUptime.textContent = `${Math.floor(data.uptimeSec / 60)} min`;
+    if (statPackets) statPackets.textContent = data.packetsSent?.toLocaleString() || '0';
+    if (statUnderruns) statUnderruns.textContent = data.underruns || '0';
+  } catch (e) {}
 }
 
-if (tsSettingsForm) {
-  tsSettingsForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const address = tsAddressInput.value.trim();
-    const password = tsPasswordInput.value;
-    const nickname = tsNicknameInput.value.trim();
-    const channel = tsChannelInput.value.trim();
-    const channelPassword = tsChannelPasswordInput.value;
+document.querySelectorAll('.modal-close-btn').forEach(btn => {
+  btn.addEventListener('click', () => ytModal.classList.add('hidden'));
+});
 
-    tsFeedback.classList.add('hidden');
-    tsSaveBtn.disabled = true;
-    tsSaveBtn.innerHTML = '<span>Speichern & Verbinden...</span>';
-
-    try {
-      const res = await apiFetch('/api/teamspeak/config', {
-        method: 'POST',
-        body: JSON.stringify({ address, password, nickname, channel, channelPassword })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Fehler beim Speichern');
-      tsFeedback.textContent = data.message;
-      tsFeedback.className = 'login-error yt-feedback-success';
-      tsFeedback.classList.remove('hidden');
-      fetchTsConfig();
-    } catch (err) {
-      tsFeedback.textContent = err.message;
-      tsFeedback.className = 'login-error';
-      tsFeedback.classList.remove('hidden');
-    } finally {
-      tsSaveBtn.disabled = false;
-      tsSaveBtn.innerHTML = '<span>Speichern & Verbinden</span>';
-    }
-  });
-}
-
-if (ytCloseBtn) {
-  ytCloseBtn.addEventListener('click', () => {
-    ytModal.classList.add('hidden');
-  });
-}
-
-// Datei-Upload für cookies.txt
-if (ytCookieFileInput) {
-  ytCookieFileInput.addEventListener('change', (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    if (ytFileLabelText) ytFileLabelText.textContent = `📁 ${file.name}`;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      ytCookieInput.value = event.target.result || '';
-      showYtFeedback(`Datei "${file.name}" eingelesen (${Math.round(file.size / 1024)} KB). Klicke jetzt auf "Cookies speichern".`, true);
-    };
-    reader.onerror = () => {
-      showYtFeedback('Fehler beim Lesen der Cookie-Datei.', false);
-    };
-    reader.readAsText(file);
-  });
-}
-
-// Cookie Formular
-if (ytCookieForm) {
-  ytCookieForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const cookies = ytCookieInput.value.trim();
-    if (!cookies) {
-      showYtFeedback('Bitte wähle eine Datei aus oder füge den Inhalt deiner cookies.txt ein.', false);
-      return;
-    }
-
-    try {
-      const res = await apiFetch('/api/youtube/cookies', {
-        method: 'POST',
-        body: JSON.stringify({ cookies })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Fehler beim Speichern');
-      showYtFeedback(data.message || 'Cookies erfolgreich gespeichert!', true);
-      ytCookieInput.value = '';
-      if (ytCookieFileInput) ytCookieFileInput.value = '';
-      if (ytFileLabelText) ytFileLabelText.textContent = '📁 cookies.txt Datei auswählen';
-      fetchYtStatus();
-    } catch (err) {
-      showYtFeedback(err.message, false);
-    }
-  });
-}
-
-// Verbindungstest (prüft echten Stream)
-if (ytTestBtn) {
-  ytTestBtn.addEventListener('click', async () => {
-    ytTestBtn.disabled = true;
-    ytTestBtn.innerHTML = '<span>Prüfe Video-Stream...</span>';
-    showYtFeedback('Verbindungstest zu YouTube läuft...', true);
-
-    try {
-      const res = await apiFetch('/api/youtube/test', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Test fehlgeschlagen');
-      showYtFeedback(data.message, true);
-    } catch (err) {
-      showYtFeedback(`Test fehlgeschlagen: ${err.message}`, false);
-    } finally {
-      ytTestBtn.disabled = false;
-      ytTestBtn.innerHTML = '<span>Verbindung testen</span>';
-    }
-  });
-}
-
-// Cookies löschen
-if (ytDeleteBtn) {
-  ytDeleteBtn.addEventListener('click', async () => {
-    if (!confirm('Möchtest du die gespeicherten YouTube Cookies wirklich löschen?')) return;
-    try {
-      const res = await apiFetch('/api/youtube/cookies', { method: 'DELETE' });
-      const data = await res.json();
-      showYtFeedback(data.message, true);
-      ytCookieInput.value = '';
-      if (ytCookieFileInput) ytCookieFileInput.value = '';
-      if (ytFileLabelText) ytFileLabelText.textContent = '📁 cookies.txt Datei auswählen';
-      fetchYtStatus();
-    } catch (err) {
-      showYtFeedback(err.message, false);
-    }
+if (ytSettingsBtn) {
+  ytSettingsBtn.addEventListener('click', () => {
+    ytModal.classList.remove('hidden');
   });
 }
 

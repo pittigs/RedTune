@@ -9,7 +9,8 @@ import {
   moveClient, 
   sendChannelMessage, 
   sendPrivateMessage, 
-  sendServerMessage 
+  sendServerMessage,
+  type ChannelID
 } from '@honeybbq/teamspeak';
 import type { BotConfig } from '../config.js';
 import { AudioPlayer } from '../audio/player.js';
@@ -29,15 +30,20 @@ export class TeamSpeakBot {
   public lastConnectionError: string | null = null;
   public isConnecting: boolean = false;
   public currentChannelName: string = '';
+  public currentChannelId?: ChannelID;
 
   constructor(
     public readonly config: BotConfig,
     public readonly dataDir: string = './data'
   ) {
-    this.queue = new MusicQueue();
+    // Persistente Queue mit automatischem Speichern/Laden
+    const queueFile = path.join(this.dataDir, 'queue.json');
+    this.queue = new MusicQueue(queueFile);
+    this.queue.onQueueChange = () => this.onStatusChange?.();
+
     this.resolver = new AudioResolver(config.audio.ytdlpPath, this.dataDir);
 
-    // Initialisiert den AudioPlayer mit unserem voiceSender Hook
+    // Initialisiert den AudioPlayer mit voiceSender Hook
     this.player = new AudioPlayer(
       (packet: Uint8Array, codec: Codec) => {
         if (!packet || packet.length === 0) return;
@@ -55,13 +61,32 @@ export class TeamSpeakBot {
     );
 
     this.player.volume = config.audio.defaultVolume;
+    if (config.audio.filter) {
+      this.player.activeFilter = config.audio.filter;
+    }
 
-    // Automatisch den nächsten Song abspielen wenn der aktuelle endet
+    // Automatisch den nächsten Song abspielen oder Auto-DJ aktivieren
     this.player.onTrackEnd = async () => {
       const next = this.queue.next();
       if (next) {
         await this.player.play(next);
-        await this.broadcastChannel(`🎶 Spiele jetzt nächsten Track: **${next.title}**`);
+        await this.broadcastChannel(`🎶 Spiele jetzt nächsten Track: [b]${next.title}[/b]`);
+      } else if (this.config.bot.autoDj && this.queue.getCurrent()) {
+        const last = this.queue.getCurrent()!;
+        console.log(`[Auto-DJ] Warteschlange leer. Suche ähnliche Titel zu "${last.title}"...`);
+        try {
+          const related = await this.resolver.getRelated(last.url);
+          if (related.length > 0) {
+            const autoTrack = related[0];
+            this.queue.addMultiple(related.slice(1));
+            await this.player.play(autoTrack);
+            await this.broadcastChannel(`📻 [b]Auto-DJ[/b]: Spiele empfohlenen Track: [b]${autoTrack.title}[/b]`);
+            return;
+          }
+        } catch (e) {
+          console.warn('[Auto-DJ] Fehler beim Laden:', e);
+        }
+        console.log('[Bot] Warteschlange beendet.');
       } else {
         console.log('[Bot] Warteschlange beendet.');
       }
@@ -72,7 +97,8 @@ export class TeamSpeakBot {
       this.queue,
       this.resolver,
       config.bot.commandPrefix,
-      (targetChannel: string) => this.joinChannel(targetChannel)
+      (targetChannel: string) => this.joinChannel(targetChannel),
+      () => this.getChannelUserCount()
     );
   }
 
@@ -93,7 +119,6 @@ export class TeamSpeakBot {
     console.log(`[Bot] Verbinde zu TeamSpeak Server: ${serverAddr}...`);
     this.isConnecting = true;
     this.lastConnectionError = null;
-    this.onStatusChange?.();
 
     const clientOptions: ClientOptions = {
       serverPassword: this.config.server.password || undefined,
@@ -117,7 +142,6 @@ export class TeamSpeakBot {
       console.log(`[Bot] ✔ Erfolgreich mit TeamSpeak verbunden! Client-ID: ${this.client.clientID}`);
       this.onStatusChange?.();
 
-      // Channel synchronisieren und beitreten
       setTimeout(async () => {
         if (this.config.server.channel) {
           await this.joinChannel(this.config.server.channel, this.config.server.channelPassword);
@@ -160,7 +184,6 @@ export class TeamSpeakBot {
 
     // Chat-Nachrichten verarbeiten
     this.client.on('textMessage', async (msg) => {
-      // Ignoriere eigene Nachrichten
       if (msg.invokerID === this.client?.clientID) return;
 
       console.log(`[Chat] [${msg.invokerName}]: ${msg.message}`);
@@ -193,9 +216,7 @@ export class TeamSpeakBot {
     if (this.client?.status === ClientStatus.Connected) {
       try {
         await sendChannelMessage(this.client, text);
-      } catch (err) {
-        // Ignorieren falls keine Channel-Schreibrechte
-      }
+      } catch (err) {}
     }
   }
 
@@ -208,6 +229,7 @@ export class TeamSpeakBot {
       ]);
       const selfClient = clients.find(c => c.id === this.client?.clientID);
       if (selfClient) {
+        this.currentChannelId = selfClient.channelID;
         const ch = channels.find(c => c.id === selfClient.channelID);
         if (ch) {
           this.currentChannelName = ch.name;
@@ -218,8 +240,16 @@ export class TeamSpeakBot {
           this.onStatusChange?.();
         }
       }
-    } catch (e) {
-      // Ignorieren falls Berechtigungen eingeschränkt sind
+    } catch (e) {}
+  }
+
+  public async getChannelUserCount(): Promise<number> {
+    if (!this.client || this.client.status !== ClientStatus.Connected) return 1;
+    try {
+      const clients = await listClients(this.client, { timeoutMs: 5_000 });
+      return clients.filter(c => c.channelID === this.currentChannelId).length;
+    } catch {
+      return 1;
     }
   }
 
@@ -234,14 +264,12 @@ export class TeamSpeakBot {
       const channels = await listChannels(this.client, { timeoutMs: 10_000 });
       const targetLower = channelTarget.trim().toLowerCase();
 
-      // 1. Suche nach exaktem Channel-Namen oder Channel-ID
       let targetCh = channels.find(
         (ch) =>
           ch.name.trim().toLowerCase() === targetLower ||
           String(ch.id) === channelTarget.trim()
       );
 
-      // 2. Falls nicht gefunden, suche nach Teilübereinstimmung
       if (!targetCh) {
         targetCh = channels.find((ch) =>
           ch.name.toLowerCase().includes(targetLower)
@@ -255,6 +283,7 @@ export class TeamSpeakBot {
           timeoutMs: 10_000,
         });
         this.currentChannelName = targetCh.name;
+        this.currentChannelId = targetCh.id;
         if (targetCh.codec !== undefined) {
           this.player.codec = targetCh.codec as Codec;
           console.log(`[Bot] Verwende Channel-Codec: ${targetCh.codec === Codec.OpusVoice ? 'Opus Voice' : 'Opus Music'}`);
@@ -264,7 +293,6 @@ export class TeamSpeakBot {
         return true;
       } else {
         console.warn(`[Bot] ❌ Channel "${channelTarget}" nicht gefunden.`);
-        console.log(`[Bot] Gefundene Channels:`, channels.map((c) => c.name).join(', '));
         return false;
       }
     } catch (err) {
@@ -284,7 +312,6 @@ export class TeamSpeakBot {
       }
     }
 
-    // Neue Identity mit Sicherheitslevel 8 generieren
     console.log('[Bot] Generiere neue TeamSpeak Identity (Level 8)...');
     const ident = generateIdentitySync(8);
     fs.mkdirSync(this.dataDir, { recursive: true });
@@ -307,11 +334,17 @@ export class TeamSpeakBot {
         volume: this.player.volume,
         positionSec: this.player.positionSec,
         currentTrack: this.player.currentTrack,
-        lastError: this.player.lastPlaybackError
+        lastError: this.player.lastPlaybackError,
+        filter: this.player.activeFilter,
+        packetsSent: this.player.totalPacketsSent,
+        bytesSent: this.player.totalBytesSent,
+        underruns: this.player.underrunCount
       },
       queue: {
         items: this.queue.getItems(),
-        loopMode: this.queue.loopMode
+        history: this.queue.getHistory().slice(0, 10),
+        loopMode: this.queue.loopMode,
+        autoDj: this.config.bot.autoDj ?? false
       }
     };
   }
