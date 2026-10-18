@@ -7,10 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import multer from 'multer';
 import type { TeamSpeakBot } from '../bot/client.js';
 import { UserManager } from '../auth/users.js';
 import { getYtdlpAuthArgs } from '../audio/auth-args.js';
 import { saveConfig, type AudioFilterPreset } from '../config.js';
+import { RADIO_STATIONS, findRadioStation, radioStationToTrack } from '../audio/radio.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -409,6 +411,106 @@ export function startWebServer(bot: TeamSpeakBot, port: number = 58913) {
     }
     const ok = await bot.joinChannel(channel, password);
     res.json({ success: ok });
+  });
+
+  // --- Internet Radio Endpunkte ---
+  app.get('/api/radio/stations', (_req: Request, res: Response) => {
+    res.json({ stations: RADIO_STATIONS });
+  });
+
+  app.post('/api/radio/play', async (req: Request, res: Response) => {
+    const { stationId } = req.body;
+    const station = findRadioStation(stationId || '');
+    if (!station) {
+      return res.status(404).json({ error: 'Radiosender nicht gefunden' });
+    }
+    const track = radioStationToTrack(station, 'Web Dashboard');
+    if (!bot.player.isPlaying) {
+      bot.queue.setCurrent(track);
+      await bot.player.play(track);
+    } else {
+      bot.queue.add(track);
+    }
+    broadcast();
+    res.json({ success: true, station, track });
+  });
+
+  // --- Lokale Song-Uploads mit Multer ---
+  const uploadDir = bot.resolver.localFiles.getUploadsDir();
+  const storage = multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      cb(null, uploadDir);
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      const base = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_\-\s]/g, '').trim() || 'upload';
+      cb(null, `${base}-${Date.now()}${ext}`);
+    }
+  });
+
+  const upload = multer({
+    storage,
+    limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB Limit
+    fileFilter: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      if (['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.opus'].includes(ext)) {
+        cb(null, true);
+      } else {
+        cb(new Error('Nicht unterstütztes Format. Bitte MP3, WAV, OGG, FLAC oder M4A wählen.'));
+      }
+    }
+  });
+
+  app.get('/api/uploads', (_req: Request, res: Response) => {
+    res.json({ files: bot.resolver.localFiles.listFiles() });
+  });
+
+  app.post('/api/upload', (req: Request, res: Response) => {
+    upload.single('audio')(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ error: err.message || 'Fehler beim Hochladen' });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: 'Keine Audiodatei übermittelt' });
+      }
+      const files = bot.resolver.localFiles.listFiles();
+      const created = files.find(f => f.filename === req.file?.filename);
+      broadcast();
+      res.json({ success: true, file: created });
+    });
+  });
+
+  app.delete('/api/uploads/:filename', (req: Request, res: Response) => {
+    const raw = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
+    const ok = bot.resolver.localFiles.deleteFile(raw || '');
+    broadcast();
+    res.json({ success: ok });
+  });
+
+  app.post('/api/uploads/play/:filename', async (req: Request, res: Response) => {
+    const raw = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
+    const match = bot.resolver.localFiles.findFile(raw || '');
+    if (!match) {
+      return res.status(404).json({ error: 'Datei nicht gefunden' });
+    }
+    const track = bot.resolver.localFiles.entryToTrack(match, 'Web Dashboard');
+    if (!bot.player.isPlaying) {
+      bot.queue.setCurrent(track);
+      await bot.player.play(track);
+    } else {
+      bot.queue.add(track);
+    }
+    broadcast();
+    res.json({ success: true, track });
+  });
+
+  app.get('/api/uploads/raw/:filename', (req: Request, res: Response) => {
+    const raw = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
+    const full = bot.resolver.localFiles.getFilePath(raw || '');
+    if (!full) {
+      return res.status(404).json({ error: 'Datei nicht gefunden' });
+    }
+    res.sendFile(path.resolve(full));
   });
 
   // YouTube / Cookie Management Endpunkte

@@ -245,6 +245,82 @@
             <span>Schließen</span>
           </button>
         </div>
+    </div>
+  </div>
+
+  <!-- Internet-Radio Modal -->
+  <div id="radioModal" class="login-overlay hidden">
+    <div class="login-card radio-modal-card">
+      <div class="modal-header-row">
+        <div>
+          <h2>📻 Internet-Radio Live</h2>
+          <p>Unterbrechungsfreier 24/7 Live-Stream ohne Verzögerung.</p>
+        </div>
+        <button type="button" class="btn-icon radio-modal-close-btn" title="Schließen">✕</button>
+      </div>
+
+      <div class="radio-search-box">
+        <input type="text" id="radioFilterInput" placeholder="Sender oder Genre suchen (z. B. 1LIVE, Rock, Techno)..." />
+      </div>
+
+      <div class="radio-grid" id="radioStationsGrid">
+        <!-- Station cards rendered dynamically -->
+      </div>
+
+      <div class="modal-btn-row" style="margin-top: 16px;">
+        <button type="button" class="btn-secondary radio-modal-close-btn" style="flex: 1;">
+          <span>Schließen</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload Modal -->
+  <div id="uploadModal" class="login-overlay hidden">
+    <div class="login-card upload-modal-card">
+      <div class="modal-header-row">
+        <div>
+          <h2>📁 Eigene Lieder hochladen</h2>
+          <p>MP3, WAV, FLAC, OGG & M4A direkt auf deinen Bot laden.</p>
+        </div>
+        <button type="button" class="btn-icon upload-modal-close-btn" title="Schließen">✕</button>
+      </div>
+
+      <!-- Drag & Drop Zone -->
+      <div class="upload-dropzone" id="uploadDropzone">
+        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+        <p class="dropzone-title">Dateien hierher ziehen oder klicken zum Auswählen</p>
+        <span class="dropzone-hint">Unterstützt MP3, WAV, FLAC, OGG, M4A (Max. 100 MB pro Datei)</span>
+        <input type="file" id="fileUploadInput" accept=".mp3,.wav,.ogg,.flac,.m4a,.aac,.opus" multiple class="hidden" />
+      </div>
+
+      <!-- Upload Progress -->
+      <div id="uploadProgressContainer" class="upload-progress-container hidden">
+        <div class="progress-bar-bg">
+          <div id="uploadProgressBar" class="progress-bar-fill" style="width: 0%;"></div>
+        </div>
+        <span id="uploadProgressText">Wird hochgeladen...</span>
+      </div>
+
+      <!-- Uploaded Songs List -->
+      <div class="uploaded-files-section">
+        <div class="section-subhead">
+          <h3>Gespeicherte Lieder</h3>
+          <span id="uploadedFilesCount">0 Dateien</span>
+        </div>
+        <div class="uploaded-files-list" id="uploadedFilesList">
+          <!-- Files list rendered dynamically -->
+        </div>
+      </div>
+
+      <div class="modal-btn-row" style="margin-top: 16px;">
+        <button type="button" class="btn-secondary upload-modal-close-btn" style="flex: 1;">
+          <span>Schließen</span>
+        </button>
       </div>
     </div>
   </div>
@@ -280,6 +356,18 @@
           </svg>
           <span id="userName">User</span>
         </div>
+        <!-- Radio Button -->
+        <button id="radioModalBtn" class="btn-icon" title="📻 Internet-Radio (1LIVE, SWR3, TechnoBase...)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M3.24 6.15C2.51 6.43 2 7.17 2 8v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8c0-.83-.51-1.57-1.24-1.85L12 2.47 3.24 6.15zM4 9h16v11H4V9zm8 2a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zm0 2a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/>
+          </svg>
+        </button>
+        <!-- Upload Button -->
+        <button id="uploadModalBtn" class="btn-icon" title="📁 Eigene Lieder hochladen & verwalten">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/>
+          </svg>
+        </button>
         <!-- Theme Toggle -->
         <button id="themeToggleBtn" class="btn-icon" title="Design umschalten">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
@@ -309,7 +397,7 @@
         <input 
           type="text" 
           id="searchInput" 
-          placeholder="YouTube Music, Spotify Link oder Songtitel suchen..." 
+          placeholder="YouTube Music, Spotify Link, Songtitel oder Radiosender (1LIVE)..." 
           autocomplete="off"
         />
         <button type="button" id="searchInstantBtn" class="btn-secondary" style="margin-right: 6px;">
@@ -319,6 +407,17 @@
           <span>Abspielen</span>
         </button>
       </form>
+
+      <!-- Quick Action Shortcuts -->
+      <div class="quick-action-shortcuts">
+        <button type="button" id="pillRadioBtn" class="pill-shortcut">
+          <span>📻 Internet-Radio Live</span>
+        </button>
+        <button type="button" id="pillUploadBtn" class="pill-shortcut">
+          <span>📁 Eigene Lieder</span>
+        </button>
+      </div>
+
       <!-- Live Search Results Dropdown -->
       <div id="searchResultsDropdown" class="search-results-dropdown hidden"></div>
     </section>

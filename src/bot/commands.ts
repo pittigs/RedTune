@@ -2,6 +2,7 @@ import type { AudioPlayer } from '../audio/player.js';
 import type { MusicQueue } from '../audio/queue.js';
 import type { AudioResolver } from '../audio/resolver.js';
 import type { AudioFilterPreset } from '../config.js';
+import { RADIO_STATIONS, findRadioStation, radioStationToTrack } from '../audio/radio.js';
 
 export interface CommandContext {
   senderUID: string;
@@ -133,6 +134,18 @@ export class CommandHandler {
         case 'notification':
         case 'rimshot':
           await this.cmdSoundboard(cmd, argText, ctx);
+          break;
+
+        case 'radio':
+        case 'radios':
+          await this.cmdRadio(argText, ctx);
+          break;
+
+        case 'local':
+        case 'upload':
+        case 'uploads':
+        case 'files':
+          await this.cmdLocal(argText, ctx);
           break;
 
         case 'join':
@@ -426,11 +439,82 @@ export class CommandHandler {
     await ctx.reply(`📢 Soundboard: [b]${effect}[/b] abgespielt!`);
   }
 
+  private async cmdRadio(stationName: string, ctx: CommandContext): Promise<void> {
+    if (!stationName) {
+      let list = '📻 [b]Verfügbare Internet-Radiosender:[/b]\n';
+      RADIO_STATIONS.forEach(s => {
+        list += `• [b]${s.name}[/b] ([code]${this.prefix}radio ${s.id}[/code]) - ${s.genre}\n`;
+      });
+      list += `Tipp: Du kannst auch direkt [code]${this.prefix}play 1live[/code] oder [code]${this.prefix}radio swr3[/code] eingeben!`;
+      await ctx.reply(list);
+      return;
+    }
+
+    const station = findRadioStation(stationName);
+    if (!station) {
+      await ctx.reply(`❌ Radiosender [b]"${stationName}"[/b] nicht gefunden. Nutze [code]${this.prefix}radio[/code] für eine Liste.`);
+      return;
+    }
+
+    const track = radioStationToTrack(station, ctx.senderName);
+    this.voteSkips.clear();
+
+    if (!this.player.isPlaying) {
+      this.queue.setCurrent(track);
+      await this.player.play(track);
+      await ctx.reply(`📻 Spiele jetzt live: [b]${station.name}[/b] (${station.tagline})`);
+    } else {
+      this.queue.add(track);
+      await ctx.reply(`➕ Radiosender zur Warteschlange hinzugefügt: [b]${station.name}[/b]`);
+    }
+  }
+
+  private async cmdLocal(arg: string, ctx: CommandContext): Promise<void> {
+    const localManager = this.resolver.localFiles;
+    if (!arg) {
+      const files = localManager.listFiles();
+      if (files.length === 0) {
+        await ctx.reply('📁 Keine lokalen Lieder hochgeladen. Nutze das Web-Dashboard zum Hochladen von MP3s/Audio-Dateien!');
+        return;
+      }
+      let list = '📁 [b]Hochgeladene eigene Lieder:[/b]\n';
+      files.slice(0, 10).forEach((f, i) => {
+        const sizeMb = (f.sizeBytes / (1024 * 1024)).toFixed(1);
+        list += `• [b]${i + 1}. ${f.title}[/b] (${sizeMb} MB) -> [code]${this.prefix}play local:${f.filename}[/code]\n`;
+      });
+      if (files.length > 10) {
+        list += `... und ${files.length - 10} weitere im Web-Dashboard.`;
+      }
+      await ctx.reply(list);
+      return;
+    }
+
+    const match = localManager.findFile(arg);
+    if (!match) {
+      await ctx.reply(`❌ Lokale Datei [b]"${arg}"[/b] nicht gefunden. Nutze [code]${this.prefix}local[/code] für die Liste.`);
+      return;
+    }
+
+    const track = localManager.entryToTrack(match, ctx.senderName);
+    this.voteSkips.clear();
+
+    if (!this.player.isPlaying) {
+      this.queue.setCurrent(track);
+      await this.player.play(track);
+      await ctx.reply(`🎶 Spiele jetzt eigene Datei: [b]${match.title}[/b]`);
+    } else {
+      this.queue.add(track);
+      await ctx.reply(`➕ Eigene Datei zur Warteschlange hinzugefügt: [b]${match.title}[/b]`);
+    }
+  }
+
   private async cmdHelp(ctx: CommandContext): Promise<void> {
     const p = this.prefix;
     await ctx.reply(
-      `🎵 [b]RedTune – TeamSpeak 6 & 3 YouTube Music Bot[/b]\n` +
-      `• [b]${p}play <Titel/Link>[/b] ([b]${p}p[/b]) - Musik suchen & abspielen\n` +
+      `🎵 [b]RedTune – TeamSpeak 6 & 3 YouTube & Radio Music Bot[/b]\n` +
+      `• [b]${p}play <Titel/Link/Radio>[/b] ([b]${p}p[/b]) - Musik oder Radio abspielen\n` +
+      `• [b]${p}radio [Sender][/b] - Internet-Radiosender (1LIVE, SWR3, TechnoBase etc.)\n` +
+      `• [b]${p}local [Name][/b] - Eigene hochgeladene Lieder auflisten / abspielen\n` +
       `• [b]${p}pause[/b] / [b]${p}resume[/b] - Musik anhalten / fortsetzen\n` +
       `• [b]${p}skip[/b] ([b]${p}s[/b]) / [b]${p}voteskip[/b] - Nächster Song / Vote-Skip\n` +
       `• [b]${p}seek <mm:ss>[/b] - Zu Zeitstempel springen\n` +

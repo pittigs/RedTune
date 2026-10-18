@@ -4,6 +4,10 @@ import https from 'node:https';
 import type { Track } from './queue.js';
 import { getYtdlpAuthArgs } from './auth-args.js';
 
+import path from 'node:path';
+import { findRadioStation, radioStationToTrack } from './radio.js';
+import { LocalFileManager } from './local-files.js';
+
 const execFileAsync = promisify(execFile);
 
 interface YtdlpEntry {
@@ -20,26 +24,57 @@ interface YtdlpEntry {
 }
 
 export class AudioResolver {
+  public readonly localFiles: LocalFileManager;
+
   constructor(
     private readonly ytdlpPath: string = 'yt-dlp',
     private readonly dataDir: string = './data'
-  ) {}
+  ) {
+    this.localFiles = new LocalFileManager(this.dataDir);
+  }
 
   async resolve(query: string, requestedBy: string): Promise<Track[]> {
     let cleanQuery = query.trim();
 
-    // 1. Spotify URL Unterstützung
+    // 1. Internet Radio Erkennung (z. B. "1live", "swr3", "technobase", "radio 1live")
+    const radioStation = findRadioStation(cleanQuery);
+    if (radioStation) {
+      console.log(`[Resolver] Internet-Radio erkannt: ${radioStation.name} (${radioStation.genre})`);
+      return [radioStationToTrack(radioStation, requestedBy)];
+    }
+
+    // 2. Lokale hochgeladene Dateien (z. B. "local:song.mp3" oder Dateinamen-Match)
+    const localMatch = this.localFiles.findFile(cleanQuery);
+    if (localMatch) {
+      console.log(`[Resolver] Lokale Datei erkannt: ${localMatch.filename}`);
+      return [this.localFiles.entryToTrack(localMatch, requestedBy)];
+    }
+
+    // 3. Direkte Audio-Stream-URLs (Icecast, HLS, Shoutcast, MP3 Streams)
+    if (/^https?:\/\/.+(\.(mp3|aac|ogg|wav|m3u8|flac)|icecast|stream)/i.test(cleanQuery)) {
+      console.log(`[Resolver] Direkter Audiostream erkannt: ${cleanQuery}`);
+      return [{
+        id: `stream:${Math.random().toString(36).substring(7)}`,
+        title: `📻 Audio-Stream (${path.basename(cleanQuery.split('?')[0]) || 'Live'})`,
+        url: cleanQuery,
+        durationSec: 0,
+        requestedBy,
+        isStream: true
+      }];
+    }
+
+    // 4. Spotify URL Unterstützung
     if (cleanQuery.includes('open.spotify.com/')) {
       const spotifyResult = await this.resolveSpotify(cleanQuery, requestedBy);
       if (spotifyResult.length > 0) return spotifyResult;
     }
 
-    // 2. YouTube Music Radio/Mix URL Parameter entfernen für einzelne Tracks
+    // 5. YouTube Music Radio/Mix URL Parameter entfernen für einzelne Tracks
     if (cleanQuery.includes('/watch?v=') && cleanQuery.includes('list=RD')) {
       cleanQuery = cleanQuery.replace(/[&?]list=RD[^&]*/g, '');
     }
 
-    // 3. music.youtube.com zu www.youtube.com normalisieren
+    // 6. music.youtube.com zu www.youtube.com normalisieren
     if (cleanQuery.includes('music.youtube.com')) {
       cleanQuery = cleanQuery.replace('music.youtube.com', 'www.youtube.com');
     }

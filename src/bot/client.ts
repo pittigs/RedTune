@@ -67,15 +67,22 @@ export class TeamSpeakBot {
 
     // Automatisch den nächsten Song abspielen oder Auto-DJ aktivieren
     this.player.onTrackEnd = async () => {
+      const failedError = this.player.lastPlaybackError;
+      const currentTrack = this.queue.getCurrent();
+
+      if (failedError) {
+        console.error(`[Bot] Fehler bei Track "${currentTrack?.title}":`, failedError);
+        await this.broadcastChannel(`❌ [b]Wiedergabefehler bei "${currentTrack?.title || 'Titel'}":[/b] ${failedError.slice(0, 180)}`);
+      }
+
       const next = this.queue.next();
       if (next) {
-        await this.player.play(next);
         await this.broadcastChannel(`🎶 Spiele jetzt nächsten Track: [b]${next.title}[/b]`);
-      } else if (this.config.bot.autoDj && this.queue.getCurrent()) {
-        const last = this.queue.getCurrent()!;
-        console.log(`[Auto-DJ] Warteschlange leer. Suche ähnliche Titel zu "${last.title}"...`);
+        await this.player.play(next);
+      } else if (this.config.bot.autoDj && currentTrack && !currentTrack.isStream) {
+        console.log(`[Auto-DJ] Warteschlange leer. Suche ähnliche Titel zu "${currentTrack.title}"...`);
         try {
-          const related = await this.resolver.getRelated(last.url);
+          const related = await this.resolver.getRelated(currentTrack.url);
           if (related.length > 0) {
             const autoTrack = related[0];
             this.queue.addMultiple(related.slice(1));

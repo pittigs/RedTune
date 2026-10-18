@@ -337,7 +337,29 @@ function renderStatus(status) {
   const player = status.player;
   if (player && player.currentTrack) {
     trackTitle.textContent = player.currentTrack.title;
-    trackMeta.textContent = `Angefordert von ${player.currentTrack.requestedBy}`;
+
+    if (player.currentTrack.isStream) {
+      trackMeta.innerHTML = `<span class="live-indicator"><span class="live-indicator-dot"></span>LIVE</span> 📻 Internet-Radio • Angefordert von ${escapeHtml(player.currentTrack.requestedBy || 'Dashboard')}`;
+      currentTime.textContent = formatTime(player.positionSec || 0);
+      totalTime.textContent = 'LIVE';
+      progressBarFill.style.width = '100%';
+    } else if (player.currentTrack.isLocal) {
+      trackMeta.innerHTML = `📁 Eigene Audiodatei • Angefordert von ${escapeHtml(player.currentTrack.requestedBy || 'Dashboard')}`;
+      const curSec = player.positionSec || 0;
+      const durSec = player.currentTrack.durationSec || 0;
+      currentTime.textContent = formatTime(curSec);
+      totalTime.textContent = durSec > 0 ? formatTime(durSec) : '--:--';
+      const percent = durSec > 0 ? Math.min(100, (curSec / durSec) * 100) : 0;
+      progressBarFill.style.width = `${percent}%`;
+    } else {
+      trackMeta.textContent = `Angefordert von ${player.currentTrack.requestedBy}`;
+      const curSec = player.positionSec || 0;
+      const durSec = player.currentTrack.durationSec || 0;
+      currentTime.textContent = formatTime(curSec);
+      totalTime.textContent = formatTime(durSec);
+      const percent = durSec > 0 ? Math.min(100, (curSec / durSec) * 100) : 0;
+      progressBarFill.style.width = `${percent}%`;
+    }
 
     if (player.currentTrack.thumbnail) {
       trackThumbnail.src = player.currentTrack.thumbnail;
@@ -347,14 +369,6 @@ function renderStatus(status) {
       trackThumbnail.classList.add('hidden');
       albumArtPlaceholder.classList.remove('hidden');
     }
-
-    const curSec = player.positionSec || 0;
-    const durSec = player.currentTrack.durationSec || 0;
-    currentTime.textContent = formatTime(curSec);
-    totalTime.textContent = formatTime(durSec);
-
-    const percent = durSec > 0 ? Math.min(100, (curSec / durSec) * 100) : 0;
-    progressBarFill.style.width = `${percent}%`;
 
     if (player.isPlaying && !player.isPaused) {
       playIcon.classList.add('hidden');
@@ -917,15 +931,325 @@ async function loadTelemetryStats() {
   } catch (e) {}
 }
 
+// --- Internet-Radio Modal Steuerung ---
+const radioModal = document.getElementById('radioModal');
+const radioModalBtn = document.getElementById('radioModalBtn');
+const pillRadioBtn = document.getElementById('pillRadioBtn');
+const radioFilterInput = document.getElementById('radioFilterInput');
+const radioStationsGrid = document.getElementById('radioStationsGrid');
+let radioStations = [];
+
+async function loadRadioStations() {
+  if (!radioStationsGrid) return;
+  radioStationsGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 24px; color: var(--text-muted);">Lade Sender...</div>';
+  try {
+    const res = await apiFetch('/api/radio/stations');
+    const data = await res.json();
+    radioStations = data.stations || [];
+    renderRadioStations(radioFilterInput?.value || '');
+  } catch (err) {
+    radioStationsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 24px; color: #ff3b30;">Fehler beim Laden: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderRadioStations(filter = '') {
+  if (!radioStationsGrid) return;
+  const q = filter.trim().toLowerCase();
+  const filtered = radioStations.filter(s => 
+    s.name.toLowerCase().includes(q) || 
+    s.genre.toLowerCase().includes(q) || 
+    s.tagline.toLowerCase().includes(q)
+  );
+
+  if (filtered.length === 0) {
+    radioStationsGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 24px; color: var(--text-muted);">Kein Sender gefunden</div>';
+    return;
+  }
+
+  radioStationsGrid.innerHTML = filtered.map(station => `
+    <div class="station-card" style="border-top: 2px solid ${station.color || 'var(--primary)'};">
+      <div class="station-top">
+        <div class="station-logo" style="background: ${station.color ? station.color + '26' : 'rgba(255,255,255,0.08)'}; color: ${station.color || '#fff'};">
+          ${station.logo || '📻'}
+        </div>
+        <div class="station-details">
+          <div class="station-name">${escapeHtml(station.name)}</div>
+          <div class="station-genre">${escapeHtml(station.genre)}</div>
+        </div>
+      </div>
+      <div class="station-tagline">${escapeHtml(station.tagline || '')}</div>
+      <div class="station-actions">
+        <button class="btn-station-play" onclick="playRadioStation('${escapeHtml(station.id)}')">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          <span>Live hören</span>
+        </button>
+        <button class="btn-station-queue" onclick="queueRadioStation('${escapeHtml(station.name)}')">
+          <span>+ Queue</span>
+        </button>
+      </div>
+    </div>
+  `).join('');
+}
+
+window.playRadioStation = async function(stationId) {
+  try {
+    const res = await apiFetch('/api/radio/play', {
+      method: 'POST',
+      body: JSON.stringify({ stationId })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Fehler beim Starten');
+    showToast(`📻 Live-Radio gestartet: ${data.station?.name || stationId}`);
+    radioModal?.classList.add('hidden');
+  } catch (err) {
+    showToast(`Fehler: ${err.message}`, true);
+  }
+};
+
+window.queueRadioStation = async function(stationName) {
+  try {
+    const res = await apiFetch('/api/play', {
+      method: 'POST',
+      body: JSON.stringify({ query: stationName })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Fehler beim Hinzufügen');
+    showToast(`📻 ${stationName} zur Warteschlange hinzugefügt!`);
+  } catch (err) {
+    showToast(`Fehler: ${err.message}`, true);
+  }
+};
+
+if (radioFilterInput) {
+  radioFilterInput.addEventListener('input', (e) => {
+    renderRadioStations(e.target.value);
+  });
+}
+
+if (radioModalBtn) {
+  radioModalBtn.addEventListener('click', () => {
+    radioModal?.classList.remove('hidden');
+    loadRadioStations();
+  });
+}
+
+if (pillRadioBtn) {
+  pillRadioBtn.addEventListener('click', () => {
+    radioModal?.classList.remove('hidden');
+    loadRadioStations();
+  });
+}
+
+document.querySelectorAll('.radio-modal-close-btn').forEach(btn => {
+  btn.addEventListener('click', () => radioModal?.classList.add('hidden'));
+});
+
+
+// --- Eigene Lieder Upload Modal & Manager ---
+const uploadModal = document.getElementById('uploadModal');
+const uploadModalBtn = document.getElementById('uploadModalBtn');
+const pillUploadBtn = document.getElementById('pillUploadBtn');
+const uploadDropzone = document.getElementById('uploadDropzone');
+const fileUploadInput = document.getElementById('fileUploadInput');
+const uploadProgressContainer = document.getElementById('uploadProgressContainer');
+const uploadProgressBar = document.getElementById('uploadProgressBar');
+const uploadProgressText = document.getElementById('uploadProgressText');
+const uploadedFilesList = document.getElementById('uploadedFilesList');
+const uploadedFilesCount = document.getElementById('uploadedFilesCount');
+
+async function loadUploadedFiles() {
+  if (!uploadedFilesList) return;
+  try {
+    const res = await apiFetch('/api/uploads');
+    const data = await res.json();
+    const files = data.files || [];
+    renderUploadedFiles(files);
+  } catch (err) {
+    uploadedFilesList.innerHTML = `<div class="empty-uploads-state" style="color: #ff3b30;">Fehler: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderUploadedFiles(files) {
+  if (!uploadedFilesList) return;
+  if (uploadedFilesCount) {
+    uploadedFilesCount.textContent = `${files.length} Datei${files.length === 1 ? '' : 'en'}`;
+  }
+
+  if (files.length === 0) {
+    uploadedFilesList.innerHTML = `
+      <div class="empty-uploads-state">
+        Noch keine Lieder hochgeladen.<br>Ziehe deine MP3- oder WAV-Dateien in das obige Feld!
+      </div>
+    `;
+    return;
+  }
+
+  uploadedFilesList.innerHTML = files.map(file => {
+    const sizeMb = (file.sizeBytes / (1024 * 1024)).toFixed(1);
+    const dateStr = file.uploadedAt ? new Date(file.uploadedAt).toLocaleDateString('de-DE') : '';
+    return `
+      <div class="uploaded-file-item">
+        <div class="uploaded-file-info">
+          <div class="file-icon">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+            </svg>
+          </div>
+          <div class="file-texts">
+            <div class="file-title" title="${escapeHtml(file.title)}">${escapeHtml(file.title)}</div>
+            <div class="file-sub">${sizeMb} MB ${dateStr ? '• ' + dateStr : ''}</div>
+          </div>
+        </div>
+        <div class="uploaded-file-actions">
+          <button class="btn-file-play" onclick="playUploadedFile('${escapeHtml(file.filename)}')">
+            Abspielen
+          </button>
+          <button class="btn-file-delete" onclick="deleteUploadedFile('${escapeHtml(file.filename)}')">
+            ✕
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+window.playUploadedFile = async function(filename) {
+  try {
+    const res = await apiFetch(`/api/uploads/play/${encodeURIComponent(filename)}`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Fehler beim Starten');
+    showToast(`Track gestartet: ${data.track?.title || filename}`);
+    uploadModal?.classList.add('hidden');
+  } catch (err) {
+    showToast(`Fehler: ${err.message}`, true);
+  }
+};
+
+window.deleteUploadedFile = async function(filename) {
+  if (!confirm(`Möchtest du "${filename}" wirklich löschen?`)) return;
+  try {
+    const res = await apiFetch(`/api/uploads/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Fehler beim Löschen');
+    showToast('Datei gelöscht');
+    loadUploadedFiles();
+  } catch (err) {
+    showToast(`Fehler: ${err.message}`, true);
+  }
+};
+
+async function uploadFileList(fileList) {
+  if (!fileList || fileList.length === 0) return;
+  
+  uploadProgressContainer?.classList.remove('hidden');
+  let successCount = 0;
+
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    if (uploadProgressText) {
+      uploadProgressText.textContent = `Lade hoch (${i + 1}/${fileList.length}): ${file.name}...`;
+    }
+    const percent = Math.round(((i) / fileList.length) * 100);
+    if (uploadProgressBar) uploadProgressBar.style.width = `${percent}%`;
+
+    const formData = new FormData();
+    formData.append('audio', file);
+
+    try {
+      const headers = {};
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers,
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload fehlgeschlagen');
+      successCount++;
+    } catch (err) {
+      showToast(`Fehler bei ${file.name}: ${err.message}`, true);
+    }
+  }
+
+  if (uploadProgressBar) uploadProgressBar.style.width = '100%';
+  if (uploadProgressText) uploadProgressText.textContent = `Fertig! ${successCount} von ${fileList.length} Dateien hochgeladen.`;
+  setTimeout(() => {
+    uploadProgressContainer?.classList.add('hidden');
+    if (uploadProgressBar) uploadProgressBar.style.width = '0%';
+  }, 2000);
+
+  showToast(`${successCount} Lied${successCount === 1 ? '' : 'er'} erfolgreich hochgeladen!`);
+  loadUploadedFiles();
+}
+
+if (uploadDropzone && fileUploadInput) {
+  uploadDropzone.addEventListener('click', () => {
+    fileUploadInput.click();
+  });
+
+  fileUploadInput.addEventListener('change', () => {
+    if (fileUploadInput.files && fileUploadInput.files.length > 0) {
+      uploadFileList(fileUploadInput.files);
+      fileUploadInput.value = '';
+    }
+  });
+
+  uploadDropzone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadDropzone.classList.add('drag-active');
+  });
+
+  uploadDropzone.addEventListener('dragleave', () => {
+    uploadDropzone.classList.remove('drag-active');
+  });
+
+  uploadDropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadDropzone.classList.remove('drag-active');
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      uploadFileList(e.dataTransfer.files);
+    }
+  });
+}
+
+if (uploadModalBtn) {
+  uploadModalBtn.addEventListener('click', () => {
+    uploadModal?.classList.remove('hidden');
+    loadUploadedFiles();
+  });
+}
+
+if (pillUploadBtn) {
+  pillUploadBtn.addEventListener('click', () => {
+    uploadModal?.classList.remove('hidden');
+    loadUploadedFiles();
+  });
+}
+
+document.querySelectorAll('.upload-modal-close-btn').forEach(btn => {
+  btn.addEventListener('click', () => uploadModal?.classList.add('hidden'));
+});
+
+// Einstellungen Modal (TeamSpeak & YouTube Cookies)
 document.querySelectorAll('.modal-close-btn').forEach(btn => {
-  btn.addEventListener('click', () => ytModal.classList.add('hidden'));
+  btn.addEventListener('click', () => ytModal?.classList.add('hidden'));
 });
 
 if (ytSettingsBtn) {
   ytSettingsBtn.addEventListener('click', () => {
-    ytModal.classList.remove('hidden');
+    ytModal?.classList.remove('hidden');
   });
 }
+
+// Klick auf den Hintergrund schließt geöffnete Modale
+[radioModal, uploadModal, ytModal].forEach(modal => {
+  if (!modal) return;
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.classList.add('hidden');
+    }
+  });
+});
 
 // Start
 checkAuth();

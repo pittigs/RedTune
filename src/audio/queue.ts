@@ -8,6 +8,8 @@ export interface Track {
   durationSec: number;
   thumbnail?: string;
   requestedBy: string;
+  isStream?: boolean;
+  isLocal?: boolean;
 }
 
 export type LoopMode = 'off' | 'track' | 'queue';

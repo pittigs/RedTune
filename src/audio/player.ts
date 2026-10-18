@@ -134,6 +134,119 @@ export class AudioPlayer {
 
       const seekArgs = startSec > 0 ? ['-ss', String(startSec)] : [];
 
+      // 1. Erkennung des Track-Typs
+      const isDirectStream = Boolean(
+        track.isStream ||
+        ((track.url.startsWith('http://') || track.url.startsWith('https://')) &&
+         !track.url.includes('youtube.com') && !track.url.includes('youtu.be') && !track.url.includes('spotify.com'))
+      );
+
+      const isLocalFile = Boolean(
+        track.isLocal ||
+        track.url.startsWith('/') ||
+        track.url.startsWith('./')
+      );
+
+      // A. Direkter Web-/Radio-Stream (Icecast, HLS, Shoutcast, MP3)
+      if (isDirectStream) {
+        console.log(`[Player] Direkter Web-/Radio-Stream gestartet: ${track.title} (${track.url})`);
+        const ffArgs = [
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-nostdin',
+          '-reconnect', '1',
+          '-reconnect_streamed', '1',
+          '-reconnect_delay_max', '5',
+          '-i', track.url,
+          ...seekArgs,
+          '-vn',
+          ...filterArgs,
+          '-f', 's16le',
+          '-ar', String(SAMPLE_RATE),
+          '-ac', String(channels),
+          'pipe:1'
+        ];
+
+        const ff = spawn(this.ffmpegPath, ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+        this.currentProcessFf = ff;
+
+        ff.stdout.pipe(pcm);
+        ff.stdout.on('error', () => {});
+        ff.on('close', () => {
+          pcm.end();
+        });
+
+        let ffStderr = '';
+        ff.stderr?.on('data', (chunk) => {
+          ffStderr += chunk.toString();
+        });
+        ff.on('close', (code) => {
+          if (code !== 0 && code !== null) {
+            const errMsg = ffStderr.trim() || `Radio-Stream beendet mit Code ${code}`;
+            console.error(`[Player] Radio ffmpeg beendet mit Code ${code}:`, errMsg);
+            this.lastPlaybackError = errMsg;
+          }
+        });
+
+        ff.on('error', (err) => {
+          console.error('[Player] Radio ffmpeg Fehler:', err.message);
+          this.lastPlaybackError = err.message;
+          this.handleEnd();
+        });
+
+        this.startAudioLoop(startSec);
+        return;
+      }
+
+      // B. Lokale Datei (Upload)
+      if (isLocalFile) {
+        console.log(`[Player] Lokale Datei gestartet: ${track.title} (${track.url})`);
+        const ffArgs = [
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-nostdin',
+          '-i', track.url,
+          ...seekArgs,
+          '-vn',
+          ...filterArgs,
+          '-f', 's16le',
+          '-ar', String(SAMPLE_RATE),
+          '-ac', String(channels),
+          'pipe:1'
+        ];
+
+        const ff = spawn(this.ffmpegPath, ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+        this.currentProcessFf = ff;
+
+        ff.stdout.pipe(pcm);
+        ff.stdout.on('error', () => {});
+        ff.on('close', () => {
+          pcm.end();
+        });
+
+        let ffStderr = '';
+        ff.stderr?.on('data', (chunk) => {
+          ffStderr += chunk.toString();
+        });
+        ff.on('close', (code) => {
+          if (code !== 0 && code !== null) {
+            const errMsg = ffStderr.trim() || `Lokale Datei FFmpeg beendet mit Code ${code}`;
+            console.error(`[Player] Lokale Datei ffmpeg beendet mit Code ${code}:`, errMsg);
+            this.lastPlaybackError = errMsg;
+          }
+        });
+
+        ff.on('error', (err) => {
+          console.error('[Player] Lokale Datei ffmpeg Fehler:', err.message);
+          this.lastPlaybackError = err.message;
+          this.handleEnd();
+        });
+
+        this.startAudioLoop(startSec);
+        return;
+      }
+
+      // C. YouTube Stream via yt-dlp & FFmpeg
       const ffArgs = [
         '-hide_banner',
         '-loglevel', 'error',
@@ -169,7 +282,6 @@ export class AudioPlayer {
         }
       });
 
-      // 2. yt-dlp Prozess starten
       const playUrl = track.url.replace('music.youtube.com', 'www.youtube.com');
       ff.stdin.on('error', () => {});
 
